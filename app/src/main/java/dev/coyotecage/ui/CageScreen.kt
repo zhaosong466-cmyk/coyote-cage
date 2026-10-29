@@ -57,6 +57,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -66,6 +67,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -426,6 +428,9 @@ private fun CameraStage(
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.SemiBold,
                 letterSpacing = 0.5.sp,
+                style = TextStyle(
+                    shadow = Shadow(Color.Black.copy(alpha = 0.85f), Offset(0f, 1f), 4f),
+                ),
             )
         }
 
@@ -435,6 +440,9 @@ private fun CameraStage(
             color = DIM,
             fontSize = 11.sp,
             fontFamily = FontFamily.Monospace,
+            style = TextStyle(
+                shadow = Shadow(Color.Black.copy(alpha = 0.85f), Offset(0f, 1f), 4f),
+            ),
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(start = 22.dp, bottom = 16.dp)
