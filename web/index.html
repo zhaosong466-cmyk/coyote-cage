@@ -1,0 +1,1060 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>画地为牢 · Web</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #0b0b0d; color: #eee;
+    font: 14px/1.45 -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    -webkit-tap-highlight-color: transparent; }
+  #app { display: flex; flex-direction: column; height: 100dvh; }
+
+  header { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #151517; }
+  .brand { font-weight: 700; letter-spacing: .5px; white-space: nowrap; }
+  .tag { font-size: 11px; color: #0b0b0d; background: #34c759; border-radius: 4px; padding: 1px 5px; margin-left: 4px; vertical-align: 2px; }
+  .status { flex: 1; color: #9e9e9e; font-size: 12px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .stage { position: relative; flex: 1; background: #000; overflow: hidden; }
+  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  .hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    background: rgba(0,0,0,.72); padding: 10px 14px; border-radius: 10px;
+    font-size: 13px; color: #ccc; max-width: 86%; text-align: center; line-height: 1.6; }
+  .hint.hidden { display: none; }
+
+  footer { padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: #151517;
+    display: flex; flex-direction: column; gap: 8px; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .meta { color: #9e9e9e; font-size: 12px; }
+  .meta b { color: #eee; font-weight: 600; }
+
+  button { font: inherit; padding: 9px 12px; border-radius: 10px; border: 1px solid #3a3a3e;
+    background: #232327; color: #eee; cursor: pointer; }
+  button:active { transform: translateY(1px); }
+  button.primary { background: #2f6fed; border-color: #2f6fed; }
+  button.danger { background: #e0342c; border-color: #e0342c; font-weight: 600; flex: 1; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .grow { flex: 1; }
+  .stack { display: flex; gap: 8px; }
+  .stack > button { flex: 1; }
+
+  dialog { border: none; border-radius: 16px; padding: 0; background: #1a1a1d; color: #eee;
+    width: min(520px, 94vw); }
+  dialog::backdrop { background: rgba(0,0,0,.65); }
+  .sheet { padding: 16px; display: flex; flex-direction: column; gap: 12px; max-height: 82dvh; overflow: auto; }
+  .sheet h2 { margin: 0; font-size: 16px; }
+  .sheet h3 { margin: 6px 0 0; font-size: 13px; color: #34c759; font-weight: 600; }
+  .field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+  .field .line { display: flex; justify-content: space-between; }
+  .field .line output { color: #9e9e9e; }
+  input[type=range] { width: 100%; accent-color: #34c759; }
+  select, input[type=text], textarea {
+    background: #111114; color: #eee; border: 1px solid #3a3a3e; border-radius: 8px;
+    padding: 8px; font: inherit; width: 100%; }
+  textarea { font-family: ui-monospace, Consolas, monospace; font-size: 12px; min-height: 108px; resize: vertical; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chips button { padding: 6px 10px; font-size: 12px; }
+  .err { color: #ff5b52; font-size: 12px; }
+  .err.hidden { display: none; }
+  .checkline { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+  .checkline input { width: 18px; height: 18px; accent-color: #34c759; }
+
+  #qrBox { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  #qrHolder { background: #fff; border-radius: 8px; width: 240px; height: 240px;
+    display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  #qrHolder.hidden, #qrFallback.hidden { display: none; }
+  #pairUrl { font-size: 10px; color: #9e9e9e; word-break: break-all; text-align: center; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand">画地为牢<span class="tag">WEB</span></div>
+    <div class="status" id="status">未连接</div>
+    <button id="btnConn">连接</button>
+  </header>
+
+  <div class="stage" id="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+    <div class="hint" id="hint">正在启动摄像头…</div>
+  </div>
+
+  <footer>
+    <div class="row">
+      <span class="meta" id="phase">未开始</span>
+      <span class="meta grow" id="meter"></span>
+    </div>
+    <div class="row stack">
+      <button id="btnRun" class="primary" disabled>开始</button>
+      <button id="btnSel">框选</button>
+      <button id="btnCam">镜头</button>
+      <button id="btnSet">设置</button>
+    </div>
+    <div class="row">
+      <button id="btnStop" class="danger">急停（清空波形并归零）</button>
+    </div>
+  </footer>
+</div>
+
+<dialog id="dlgSet">
+  <div class="sheet">
+    <h2>参数</h2>
+
+    <h3>强度</h3>
+    <label class="field"><span class="line">基础强度 <output id="oBase"></output></span>
+      <input type="range" id="rBase" min="1" max="40" step="1" /></label>
+    <label class="field"><span class="line">强度上限 <output id="oMax"></output></span>
+      <input type="range" id="rMax" min="1" max="100" step="1" /></label>
+    <label class="field"><span class="line">每级递增 <output id="oStep"></output></span>
+      <input type="range" id="rStep" min="1" max="10" step="1" /></label>
+    <label class="checkline">随越界时间递增 <input type="checkbox" id="cEsc" /></label>
+    <label class="field"><span class="line">每 N 秒涨一级 <output id="oEvery"></output></span>
+      <input type="range" id="rEvery" min="1" max="30" step="1" /></label>
+
+    <h3>时机</h3>
+    <label class="field"><span class="line">单次电击时长 (ms) <output id="oShock"></output></span>
+      <input type="range" id="rShock" min="100" max="3000" step="50" /></label>
+    <label class="field"><span class="line">两次间隔 (ms) <output id="oGap"></output></span>
+      <input type="range" id="rGap" min="200" max="10000" step="100" /></label>
+    <label class="field"><span class="line">越界容忍 (ms) <output id="oGrace"></output></span>
+      <input type="range" id="rGrace" min="0" max="1500" step="50" /></label>
+
+    <h3>判定</h3>
+    <label class="field">检测部位
+      <select id="selPoint">
+        <option value="torso">躯干（双肩 + 双髋）</option>
+        <option value="full">全身</option>
+        <option value="feet">双脚</option>
+      </select></label>
+    <label class="field">输出通道
+      <select id="selChannel"><option value="0">A</option><option value="1">B</option></select></label>
+
+    <h3>波形</h3>
+    <div class="chips" id="presetRow"></div>
+    <label class="field">每行 16 位 HEX，一帧 = 8 字节 = 100ms
+      <textarea id="txtWave" spellcheck="false"></textarea></label>
+    <div class="err hidden" id="waveErr">格式不对：每行必须正好 16 个十六进制字符</div>
+
+    <h3>连接</h3>
+    <label class="field">中继地址
+      <input type="text" id="txtRelay" spellcheck="false" /></label>
+
+    <div class="row stack">
+      <button id="btnTest">用当前强度试一次</button>
+      <button id="btnCloseSet" class="primary">关闭</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="dlgQr">
+  <div class="sheet">
+    <h2>用 DG-LAB 4 APP 扫码</h2>
+    <div id="qrBox">
+      <div id="qrHolder"></div>
+      <div id="qrFallback" class="err hidden">二维码库没加载出来，用下面的链接。</div>
+      <div id="pairUrl"></div>
+      <div class="row stack" style="width:100%">
+        <button id="btnCopyPair">复制配对链接</button>
+        <button id="btnCopyDeep">复制扫码链接</button>
+      </div>
+      <div class="meta" style="text-align:center">APP 内：设置 → Socket 控制 → 扫码</div>
+    </div>
+    <button id="btnCloseQr" class="primary">关闭</button>
+  </div>
+</dialog>
+
+<script type="module">
+// ============================================================ 常量
+
+const MODULE_PRIMARY = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const MODULE_FALLBACK = 'https://unpkg.com/@mediapipe/tasks-vision@0.10.14';
+const WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
+const MODEL_URLS = [
+  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+  // 兜底：把模型放到 web/models/ 下，CDN 被墙时也能跑
+  './models/pose_landmarker_lite.task',
+];
+
+const CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],[9,10],
+  [11,12],[11,13],[13,15],[15,17],[15,19],[15,21],[17,19],
+  [12,14],[14,16],[16,18],[16,20],[16,22],[18,20],
+  [11,23],[12,24],[23,24],
+  [23,25],[24,26],[25,27],[26,28],[27,29],[28,30],[29,31],[30,32],[27,31],[28,32],
+];
+
+const POINT_SETS = {
+  torso: [11, 12, 23, 24],
+  full: [0, 11, 12, 15, 16, 23, 24, 25, 26, 27, 28],
+  feet: [27, 28],
+};
+
+const PRESETS = {
+  '轻叩': '0A0A0A0A32323232\n0A0A0A0A00000000',
+  '针刺': '0A0A0A0A64646464\n0A0A0A0A00000000',
+  '起伏': '0A0A0A0A1E1E1E1E\n0A0A0A0A3C3C3C3C\n0A0A0A0A5A5A5A5A\n0A0A0A0A3C3C3C3C',
+};
+
+const DEFAULTS = {
+  base: 5, max: 25, step: 2, escalate: true, everySec: 5,
+  shockMs: 600, gapMs: 1500, graceMs: 400,
+  pointSet: 'torso', channel: 0,
+  waveform: PRESETS['轻叩'],
+  relay: 'wss://trex.dungeon-lab.cn/v4',
+};
+
+const QR_PREFIX = 'https://dungeon-lab.cn/s/?v=1&action=socket&url=';
+
+// ============================================================ 状态
+
+let S = loadSettings();
+let roi = loadRoi();
+
+let stream = null;
+let facing = 'environment';
+let pose = null;
+let latest = null;
+let lastDetect = 0;
+
+let running = false;
+let outsideMs = 0;
+let lastShockAt = 0;
+let wasViolating = false;
+let violating = false;
+
+let selecting = false;
+let dragStart = null;
+let dragNow = null;
+
+const $ = (id) => document.getElementById(id);
+const stage = $('stage');
+const video = $('video');
+const overlay = $('overlay');
+const ctx = overlay.getContext('2d');
+const hint = $('hint');
+
+// ============================================================ 设置持久化
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem('coyote-cage-settings');
+    return raw ? { ...DEFAULTS, ...JSON.parse(raw) } : { ...DEFAULTS };
+  } catch {
+    return { ...DEFAULTS };
+  }
+}
+
+function saveSettings() {
+  try { localStorage.setItem('coyote-cage-settings', JSON.stringify(S)); } catch {}
+}
+
+function loadRoi() {
+  try {
+    const raw = localStorage.getItem('coyote-cage-roi');
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return { l: 0.2, t: 0.12, r: 0.8, b: 0.88 };
+}
+
+function saveRoi() {
+  try { localStorage.setItem('coyote-cage-roi', JSON.stringify(roi)); } catch {}
+}
+
+// ============================================================ 工具
+
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+const mirrored = () => facing === 'user';
+
+function toDisplay(p) {
+  return { x: mirrored() ? 1 - p.x : p.x, y: p.y };
+}
+
+function contentRect() {
+  const vw = video.videoWidth || 4;
+  const vh = video.videoHeight || 3;
+  const bw = stage.clientWidth;
+  const bh = stage.clientHeight;
+  const scale = Math.min(bw / vw, bh / vh);
+  const w = vw * scale;
+  const h = vh * scale;
+  return { x: (bw - w) / 2, y: (bh - h) / 2, w, h };
+}
+
+function toPx(nx, ny) {
+  const r = contentRect();
+  return { x: r.x + nx * r.w, y: r.y + ny * r.h };
+}
+
+function fromPx(px, py) {
+  const r = contentRect();
+  return { x: clamp01((px - r.x) / r.w), y: clamp01((py - r.y) / r.h) };
+}
+
+function parseFrames(text) {
+  const lines = String(text).split(/[\n,;\s]+/).map((s) => s.trim()).filter(Boolean);
+  if (!lines.length) return null;
+  for (const line of lines) if (!/^[0-9a-fA-F]{16}$/.test(line)) return null;
+  return lines.map((l) => l.toUpperCase());
+}
+
+function buildFrames() {
+  const pattern = parseFrames(S.waveform);
+  if (!pattern) return null;
+  const count = Math.max(1, Math.floor(S.shockMs / 100));
+  return Array.from({ length: count }, (_, i) => pattern[i % pattern.length]);
+}
+
+function targetFor(ms) {
+  const base = Math.min(Math.max(S.base, 1), Math.max(S.max, 1));
+  if (!S.escalate) return base;
+  const steps = Math.floor(ms / 1000 / Math.max(1, S.everySec));
+  return Math.min(base + steps * S.step, S.max);
+}
+
+function setHint(text, visible = true) {
+  hint.textContent = text;
+  hint.classList.toggle('hidden', !visible);
+}
+
+// ============================================================ DG-LAB V4 客户端
+
+class Dglab {
+  constructor() {
+    this.ws = null;
+    this.phase = 'idle';
+    this.controllerId = null;
+    this.appId = null;
+    this.devices = [];
+    this.intensity = [0, 0];
+    this.battery = null;
+    this.message = '';
+    this.pending = new Map();
+    this.onchange = () => {};
+  }
+
+  emit() { this.onchange(); }
+
+  connect(url) {
+    this.disconnect();
+    this.phase = 'connecting';
+    this.emit();
+    let ws;
+    try {
+      ws = new WebSocket(url);
+    } catch (e) {
+      this.phase = 'error';
+      this.message = '地址无效';
+      this.emit();
+      return;
+    }
+    this.ws = ws;
+    ws.onmessage = (ev) => this.handle(ev.data);
+    ws.onerror = () => { this.phase = 'error'; this.message = '连接失败'; this.emit(); };
+    ws.onclose = () => {
+      this.phase = 'idle';
+      this.appId = null;
+      this.devices = [];
+      this.emit();
+    };
+  }
+
+  disconnect() {
+    if (this.ws) { try { this.ws.close(); } catch {} }
+    this.ws = null;
+    this.phase = 'idle';
+    this.controllerId = null;
+    this.appId = null;
+    this.devices = [];
+    this.intensity = [0, 0];
+    this.battery = null;
+    this.message = '';
+    for (const p of this.pending.values()) p.cancel();
+    this.pending.clear();
+    this.emit();
+  }
+
+  handle(text) {
+    let msg;
+    try { msg = JSON.parse(text); } catch { return; }
+    switch (msg.type) {
+      case 'hello':
+        this.controllerId = msg.clientId;
+        this.phase = 'waiting';
+        this.emit();
+        break;
+      case 'client_attached':
+        this.appId = msg.clientId;
+        this.phase = 'paired';
+        this.emit();
+        this.refreshDevices();
+        break;
+      case 'client_disconnected':
+        this.appId = null;
+        this.devices = [];
+        this.phase = this.controllerId ? 'waiting' : 'idle';
+        this.emit();
+        break;
+      case 'message':
+        this.onAppMessage(msg.data);
+        break;
+      case 'error':
+        this.message = msg.error || '服务端错误';
+        this.emit();
+        break;
+      case 'idle_timeout':
+        this.phase = 'error';
+        this.message = '5 分钟没有 APP 接入';
+        this.emit();
+        break;
+      default:
+        break;
+    }
+  }
+
+  onAppMessage(data) {
+    if (!data) return;
+    if (data.t === 'resp') {
+      const p = this.pending.get(data.reqId);
+      if (p) { this.pending.delete(data.reqId); p.finish(data); }
+      return;
+    }
+    if (data.t !== 'ev') return;
+    if (data.ev === 'devices.snapshot') this.applyDevices(data.devices);
+    else if (data.ev === 'devices.patch') this.applyPatch(data);
+    else if (data.ev === 'slots.patch') this.applySlots(data.slots);
+  }
+
+  applyDevices(list) {
+    if (!Array.isArray(list)) return;
+    this.devices = list.map((d) => ({ slotId: d.slotId, name: d.name || '郊狼', type: d.type || '' }));
+    list.forEach((d) => this.applyProps(d.props));
+    this.emit();
+  }
+
+  applyPatch(data) {
+    if (Array.isArray(data.added)) {
+      for (const d of data.added) {
+        this.devices = this.devices.filter((x) => x.slotId !== d.slotId);
+        this.devices.push({ slotId: d.slotId, name: d.name || '郊狼', type: d.type || '' });
+        this.applyProps(d.props);
+      }
+    }
+    if (Array.isArray(data.removed)) {
+      this.devices = this.devices.filter((d) => !data.removed.includes(d.slotId));
+    }
+    this.emit();
+  }
+
+  applySlots(slots) {
+    if (!Array.isArray(slots)) return;
+    slots.forEach((s) => this.applyProps(s.props));
+    this.emit();
+  }
+
+  applyProps(props) {
+    if (!props) return;
+    if (typeof props.intensityA === 'number') this.intensity[0] = props.intensityA;
+    if (typeof props.intensityB === 'number') this.intensity[1] = props.intensityB;
+    if (typeof props.power === 'number') this.battery = props.power;
+  }
+
+  send(obj) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(obj));
+  }
+
+  post(data) {
+    if (!this.appId) return;
+    this.send({ type: 'message', clientId: this.appId, data });
+  }
+
+  rpc(method, params = null, timeout = 5000) {
+    return new Promise((resolve) => {
+      if (!this.appId) return resolve(null);
+      const reqId = (crypto.randomUUID && crypto.randomUUID()) || String(Math.random()).slice(2);
+      const timer = setTimeout(() => { this.pending.delete(reqId); resolve(null); }, timeout);
+      this.pending.set(reqId, {
+        finish: (v) => { clearTimeout(timer); resolve(v); },
+        cancel: () => { clearTimeout(timer); resolve(null); },
+      });
+      const payload = { t: 'req', reqId, m: method };
+      if (params) payload.data = params;
+      this.post(payload);
+    });
+  }
+
+  op(data) {
+    if (!this.appId) return;
+    this.post({
+      t: 'req',
+      reqId: (crypto.randomUUID && crypto.randomUUID()) || String(Math.random()).slice(2),
+      m: 'device.op',
+      data,
+    });
+  }
+
+  slot() { return this.devices[0] ? this.devices[0].slotId : null; }
+
+  async refreshDevices() {
+    const res = await this.rpc('devices.get');
+    if (res && res.result && Array.isArray(res.result.devices)) this.applyDevices(res.result.devices);
+  }
+
+  setIntensity(target, channel) {
+    const slot = this.slot();
+    if (!slot) return;
+    const delta = target - this.intensity[channel];
+    if (!delta) return;
+    this.op({ s: slot, t: 3, c: channel, p: 1, v: delta });
+    this.intensity[channel] = target;
+    this.emit();
+  }
+
+  pulse(frames, durationMs, channel) {
+    const slot = this.slot();
+    if (!slot || !frames || !frames.length) return;
+    this.op({ s: slot, t: 0, c: channel, p: 1, d: durationMs, v: frames });
+  }
+
+  async clear(channel) {
+    const slot = this.slot();
+    if (!slot) return;
+    await this.rpc('device.op.clear', { s: slot, c: channel });
+  }
+
+  zero(channel) {
+    const slot = this.slot();
+    if (!slot) return;
+    this.op({ s: slot, t: 7, c: channel, p: 1, v: 0 });
+    this.intensity[channel] = 0;
+    this.emit();
+  }
+
+  async emergency() {
+    const slot = this.slot();
+    if (!slot) return;
+    await this.rpc('device.op.clear', { s: slot });
+    this.op({ s: slot, t: 7, c: 0, p: 1, v: 0 });
+    this.op({ s: slot, t: 7, c: 1, p: 1, v: 0 });
+    this.intensity = [0, 0];
+    this.emit();
+  }
+}
+
+const dg = new Dglab();
+
+// ============================================================ 摄像头 & 模型
+
+async function startCamera(mode) {
+  facing = mode;
+  if (stream) {
+    stream.getTracks().forEach((t) => t.stop());
+    stream = null;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    throw new Error('当前页面不是安全上下文（需要 https 或 localhost），浏览器禁用了摄像头');
+  }
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: { facingMode: mode, width: { ideal: 1280 }, height: { ideal: 960 } },
+  });
+  video.srcObject = stream;
+  video.style.transform = mode === 'user' ? 'scaleX(-1)' : 'none';
+  await video.play();
+  if (!video.videoWidth) {
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (!done) { done = true; resolve(); } };
+      video.addEventListener('loadedmetadata', finish, { once: true });
+      setTimeout(finish, 1500);
+    });
+  }
+  resizeOverlay();
+}
+
+async function loadTasks() {
+  try {
+    return await import(MODULE_PRIMARY);
+  } catch (e) {
+    console.warn('[pose] primary CDN failed, trying fallback', e);
+    return await import(MODULE_FALLBACK);
+  }
+}
+
+function handlePoseResult(result) {
+  if (result && result.landmarks && result.landmarks.length) {
+    latest = { points: result.landmarks[0], ts: performance.now() };
+  }
+}
+
+async function startPose() {
+  const { FilesetResolver, PoseLandmarker } = await loadTasks();
+  const fileset = await FilesetResolver.forVisionTasks(WASM_PATH);
+
+  const create = (modelUrl, delegate) => PoseLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: modelUrl, delegate },
+    runningMode: 'LIVE_STREAM',
+    numPoses: 1,
+    minPoseDetectionConfidence: 0.5,
+    minPosePresenceConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+    resultCallback: handlePoseResult,
+  });
+
+  const attempts = [
+    [MODEL_URLS[0], 'GPU'],
+    [MODEL_URLS[0], 'CPU'],
+    [MODEL_URLS[1], 'CPU'],
+  ];
+  let lastError = null;
+  for (const [url, delegate] of attempts) {
+    try {
+      pose = await create(url, delegate);
+      lastError = null;
+      break;
+    } catch (e) {
+      lastError = e;
+      console.warn('[pose] 初始化失败', delegate, url, e);
+    }
+  }
+  if (!pose) throw lastError || new Error('模型初始化失败');
+}
+
+function resizeOverlay() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = stage.clientWidth;
+  const h = stage.clientHeight;
+  overlay.width = Math.max(1, Math.round(w * dpr));
+  overlay.height = Math.max(1, Math.round(h * dpr));
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+// ============================================================ 主循环
+
+function loop(now) {
+  if (pose && video.readyState >= 2 && now - lastDetect > 66) {
+    lastDetect = now;
+    try { pose.detectForVideo(video, now, handlePoseResult); } catch (e) { /* 丢帧 */ }
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+
+function draw() {
+  const w = stage.clientWidth;
+  const h = stage.clientHeight;
+  ctx.clearRect(0, 0, w, h);
+
+  if (running && violating) {
+    ctx.strokeStyle = 'rgba(255,59,48,.9)';
+    ctx.lineWidth = 6;
+    ctx.strokeRect(3, 3, w - 6, h - 6);
+  }
+
+  // 判定框
+  const a = toPx(roi.l, roi.t);
+  const b = toPx(roi.r, roi.b);
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  const rw = Math.abs(b.x - a.x);
+  const rh = Math.abs(b.y - a.y);
+  ctx.fillStyle = violating ? 'rgba(255,59,48,.10)' : 'rgba(52,199,89,.08)';
+  ctx.fillRect(x, y, rw, rh);
+  ctx.setLineDash(selecting ? [10, 8] : []);
+  ctx.strokeStyle = violating ? '#ff3b30' : '#34c759';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(x, y, rw, rh);
+  ctx.setLineDash([]);
+
+  // 骨架
+  const pts = latest ? latest.points : [];
+  if (pts.length) {
+    const px = pts.map((p) => {
+      if (!p || (p.visibility !== undefined && p.visibility < 0.4)) return null;
+      const d = toDisplay(p);
+      return { pt: toPx(d.x, d.y), inside: d.x >= roi.l && d.x <= roi.r && d.y >= roi.t && d.y <= roi.b };
+    });
+
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    for (const [i, j] of CONNECTIONS) {
+      const p1 = px[i];
+      const p2 = px[j];
+      if (!p1 || !p2) continue;
+      ctx.strokeStyle = p1.inside && p2.inside ? '#34c759' : '#ff3b30';
+      ctx.beginPath();
+      ctx.moveTo(p1.pt.x, p1.pt.y);
+      ctx.lineTo(p2.pt.x, p2.pt.y);
+      ctx.stroke();
+    }
+
+    for (const p of px) {
+      if (!p) continue;
+      ctx.fillStyle = p.inside ? '#34c759' : '#ff3b30';
+      ctx.beginPath();
+      ctx.arc(p.pt.x, p.pt.y, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // 拖拽预览
+  if (selecting && dragStart && dragNow) {
+    const lx = Math.min(dragStart.x, dragNow.x);
+    const ty = Math.min(dragStart.y, dragNow.y);
+    ctx.setLineDash([8, 6]);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(lx, ty, Math.abs(dragNow.x - dragStart.x), Math.abs(dragNow.y - dragStart.y));
+    ctx.setLineDash([]);
+  }
+}
+
+// ============================================================ 判定 + 惩罚
+
+function isOutside(points) {
+  const indices = POINT_SETS[S.pointSet] || POINT_SETS.torso;
+  for (const i of indices) {
+    const p = points[i];
+    if (!p) continue;
+    if (p.visibility !== undefined && p.visibility < 0.4) continue;
+    const d = toDisplay(p);
+    if (d.x < roi.l || d.x > roi.r || d.y < roi.t || d.y > roi.b) return true;
+  }
+  return false;
+}
+
+async function fire(target) {
+  const frames = buildFrames();
+  if (!frames) return;
+  dg.setIntensity(target, S.channel);
+  dg.pulse(frames, S.shockMs, S.channel);
+}
+
+function release() {
+  dg.clear(S.channel);
+  dg.zero(S.channel);
+}
+
+setInterval(() => {
+  if (!running) return;
+  const now = performance.now();
+  const f = latest;
+  const fresh = !!f && now - f.ts < 900 && f.points && f.points.length > 0;
+  const out = fresh && isOutside(f.points);
+
+  outsideMs = out ? outsideMs + 60 : 0;
+  violating = outsideMs >= S.graceMs;
+  const target = targetFor(outsideMs);
+
+  if (violating && now - lastShockAt >= S.shockMs + S.gapMs) {
+    lastShockAt = now;
+    fire(target);
+  } else if (!violating && wasViolating) {
+    release();
+  }
+  wasViolating = violating;
+
+  $('meter').innerHTML = `越界 <b>${(outsideMs / 1000).toFixed(1)}</b>s · 目标强度 <b>${target}</b>`;
+  $('phase').textContent = violating ? '越界中' : running ? (fresh ? '监守中' : '没检测到人') : '未开始';
+  $('phase').style.color = violating ? '#ff3b30' : running && fresh ? '#34c759' : '#9e9e9e';
+}, 60);
+
+// ============================================================ 顶部状态
+
+function renderStatus() {
+  const el = $('status');
+  const btn = $('btnConn');
+  btn.disabled = false;
+
+  if (dg.phase === 'idle') {
+    el.textContent = '未连接';
+    btn.textContent = '连接';
+    btn.onclick = () => dg.connect(S.relay);
+  } else if (dg.phase === 'connecting') {
+    el.textContent = '正在连接中继…';
+    btn.textContent = '连接中…';
+    btn.disabled = true;
+  } else if (dg.phase === 'waiting') {
+    el.textContent = '等待 DG-LAB APP 扫码';
+    btn.textContent = '二维码';
+    btn.onclick = openQr;
+  } else if (dg.phase === 'paired') {
+    const dev = dg.devices[0];
+    const bits = [];
+    if (dev) bits.push(dev.name || dev.type || '郊狼');
+    bits.push(`A ${dg.intensity[0]} / B ${dg.intensity[1]}`);
+    if (dg.battery !== null) bits.push(`${dg.battery}%`);
+    el.textContent = '已连接 · ' + bits.join(' · ');
+    btn.textContent = '断开';
+    btn.onclick = () => dg.disconnect();
+  } else {
+    el.textContent = '连接异常' + (dg.message ? ' · ' + dg.message : '');
+    btn.textContent = '重连';
+    btn.onclick = () => dg.connect(S.relay);
+  }
+
+  $('btnRun').disabled = !(dg.phase === 'paired' || running);
+}
+
+dg.onchange = renderStatus;
+
+// ============================================================ 交互
+
+$('btnCam').onclick = async () => {
+  try {
+    await startCamera(facing === 'environment' ? 'user' : 'environment');
+  } catch (e) {
+    setHint('切换镜头失败：' + e.message);
+  }
+};
+
+$('btnSel').onclick = () => {
+  selecting = !selecting;
+  $('btnSel').textContent = selecting ? '完成' : '框选';
+  setHint(selecting ? '在画面里拖出判定区域' : '', selecting);
+};
+
+$('btnRun').onclick = () => {
+  if (running) {
+    running = false;
+    outsideMs = 0;
+    violating = false;
+    wasViolating = false;
+    release();
+  } else {
+    if (dg.phase !== 'paired') return;
+    running = true;
+    outsideMs = 0;
+    lastShockAt = 0;
+    wasViolating = false;
+    dg.zero(S.channel);
+  }
+  $('btnRun').textContent = running ? '停止' : '开始';
+  $('btnRun').classList.toggle('danger', running);
+  renderStatus();
+};
+
+$('btnStop').onclick = async () => {
+  running = false;
+  outsideMs = 0;
+  violating = false;
+  wasViolating = false;
+  $('btnRun').textContent = '开始';
+  $('btnRun').classList.remove('danger');
+  await dg.emergency();
+  renderStatus();
+};
+
+overlay.addEventListener('pointerdown', (e) => {
+  if (!selecting) return;
+  const rect = overlay.getBoundingClientRect();
+  dragStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  dragNow = { ...dragStart };
+  overlay.setPointerCapture(e.pointerId);
+});
+
+overlay.addEventListener('pointermove', (e) => {
+  if (!selecting || !dragStart) return;
+  const rect = overlay.getBoundingClientRect();
+  dragNow = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+});
+
+overlay.addEventListener('pointerup', () => {
+  if (!selecting || !dragStart || !dragNow) return;
+  const p1 = fromPx(dragStart.x, dragStart.y);
+  const p2 = fromPx(dragNow.x, dragNow.y);
+  const r = {
+    l: Math.min(p1.x, p2.x),
+    t: Math.min(p1.y, p2.y),
+    r: Math.max(p1.x, p2.x),
+    b: Math.max(p1.y, p2.y),
+  };
+  if (r.r - r.l > 0.05 && r.b - r.t > 0.05) {
+    roi = r;
+    saveRoi();
+  }
+  dragStart = null;
+  dragNow = null;
+  selecting = false;
+  $('btnSel').textContent = '框选';
+  setHint('', false);
+});
+
+// ============================================================ 设置面板
+
+function bindRange(id, outId, key, toValue = (v) => v) {
+  const input = $(id);
+  const out = $(outId);
+  input.value = S[key];
+  out.textContent = S[key];
+  input.addEventListener('input', () => {
+    S[key] = toValue(+input.value);
+    out.textContent = S[key];
+    saveSettings();
+  });
+}
+
+function bindSelect(id, key, toValue = (v) => v) {
+  const el = $(id);
+  el.value = S[key];
+  el.addEventListener('change', () => {
+    S[key] = toValue(el.value);
+    saveSettings();
+  });
+}
+
+function initSettingsUI() {
+  bindRange('rBase', 'oBase', 'base');
+  bindRange('rMax', 'oMax', 'max');
+  bindRange('rStep', 'oStep', 'step');
+  bindRange('rEvery', 'oEvery', 'everySec');
+  bindRange('rShock', 'oShock', 'shockMs');
+  bindRange('rGap', 'oGap', 'gapMs');
+  bindRange('rGrace', 'oGrace', 'graceMs');
+
+  const esc = $('cEsc');
+  esc.checked = S.escalate;
+  esc.addEventListener('change', () => { S.escalate = esc.checked; saveSettings(); });
+
+  bindSelect('selPoint', 'pointSet');
+  bindSelect('selChannel', 'channel', (v) => parseInt(v, 10));
+
+  const wave = $('txtWave');
+  const err = $('waveErr');
+  const syncWave = () => {
+    const ok = parseFrames(wave.value) !== null;
+    err.classList.toggle('hidden', ok);
+    wave.style.borderColor = ok ? '#3a3a3e' : '#ff5b52';
+  };
+  wave.value = S.waveform;
+  wave.addEventListener('input', () => {
+    S.waveform = wave.value;
+    saveSettings();
+    syncWave();
+  });
+  syncWave();
+
+  const presetRow = $('presetRow');
+  for (const [name, text] of Object.entries(PRESETS)) {
+    const btn = document.createElement('button');
+    btn.textContent = name;
+    btn.onclick = () => {
+      wave.value = text;
+      S.waveform = text;
+      saveSettings();
+      syncWave();
+    };
+    presetRow.appendChild(btn);
+  }
+
+  const relay = $('txtRelay');
+  relay.value = S.relay;
+  relay.addEventListener('input', () => { S.relay = relay.value.trim(); saveSettings(); });
+}
+
+$('btnSet').onclick = () => { if (!$('dlgSet').open) $('dlgSet').showModal(); };
+$('btnCloseSet').onclick = () => $('dlgSet').close();
+$('btnTest').onclick = async () => {
+  const frames = buildFrames();
+  if (!frames) return;
+  const target = Math.min(S.base, S.max);
+  dg.setIntensity(target, S.channel);
+  dg.pulse(frames, S.shockMs, S.channel);
+  setTimeout(() => { dg.clear(S.channel); dg.zero(S.channel); }, S.shockMs + 200);
+};
+
+// ============================================================ 二维码
+
+function buildPairUrl(relay, id) {
+  const base = relay.trim().replace(/\/+$/, '');
+  return base.includes('?') ? `${base}&tid=${id}` : `${base}?tid=${id}`;
+}
+
+function copyText(text) {
+  if (!text || !navigator.clipboard) return;
+  navigator.clipboard.writeText(text).catch(() => {});
+}
+
+let qrApiPromise = null;
+
+/** 二维码库按需加载：优先 jsDelivr 的 ESM 构建，失败就退化成纯文本链接。 */
+function loadQrApi() {
+  if (qrApiPromise) return qrApiPromise;
+  qrApiPromise = (async () => {
+    if (window.QRCode && typeof window.QRCode.toCanvas === 'function') return window.QRCode;
+    try {
+      const mod = await import('https://cdn.jsdelivr.net/npm/qrcode@1.5.3/+esm');
+      const api = mod.default || mod;
+      if (api && typeof api.toCanvas === 'function') return api;
+    } catch (e) {
+      console.warn('[qr] 加载失败', e);
+    }
+    return null;
+  })();
+  return qrApiPromise;
+}
+
+async function openQr() {
+  const pair = dg.controllerId ? buildPairUrl(S.relay, dg.controllerId) : '';
+  const deep = pair ? QR_PREFIX + encodeURIComponent(pair) : '';
+  $('pairUrl').textContent = pair || '还没拿到配对 ID';
+  $('btnCopyPair').onclick = () => copyText(pair);
+  $('btnCopyDeep').onclick = () => copyText(deep);
+
+  const holder = $('qrHolder');
+  const fallback = $('qrFallback');
+  holder.innerHTML = '';
+
+  const api = pair ? await loadQrApi() : null;
+  if (api) {
+    const canvas = document.createElement('canvas');
+    holder.appendChild(canvas);
+    api.toCanvas(canvas, deep, { width: 232, margin: 1 }, (err) => {
+      if (err) fallback.classList.remove('hidden');
+    });
+    fallback.classList.add('hidden');
+  } else {
+    fallback.classList.remove('hidden');
+  }
+
+  if (!$('dlgQr').open) $('dlgQr').showModal();
+}
+
+$('btnCloseQr').onclick = () => $('dlgQr').close();
+
+// ============================================================ 启动
+
+window.addEventListener('resize', resizeOverlay);
+new ResizeObserver(resizeOverlay).observe(stage);
+
+async function boot() {
+  initSettingsUI();
+  renderStatus();
+  $('btnRun').textContent = '开始';
+
+  try {
+    await startCamera(facing);
+    setHint('正在加载姿态模型…', true);
+  } catch (e) {
+    setHint('摄像头打不开：' + e.message);
+    return;
+  }
+
+  try {
+    await startPose();
+    setHint('', false);
+  } catch (e) {
+    console.error(e);
+    setHint('模型加载失败：' + e.message + '（需要能访问 cdn.jsdelivr.net 与 storage.googleapis.com）');
+    return;
+  }
+
+  requestAnimationFrame(loop);
+}
+
+boot();
+</script>
+</body>
+</html>
