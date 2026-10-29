@@ -45,6 +45,12 @@ android {
         compose = true
     }
 
+    testOptions {
+        unitTests.all {
+            it.testLogging.exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        }
+    }
+
     packaging {
         resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}")
     }
@@ -68,6 +74,11 @@ dependencies {
     implementation(libs.mediapipe.tasks.vision)
     implementation(libs.okhttp)
     implementation(libs.zxing.core)
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    testImplementation("org.json:json:20240303")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
 
 // ---------------------------------------------------------------------------

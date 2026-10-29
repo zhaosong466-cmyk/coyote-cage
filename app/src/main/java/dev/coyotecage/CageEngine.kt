@@ -3,12 +3,15 @@ package dev.coyotecage
 import android.os.SystemClock
 import dev.coyotecage.dglab.DglabV4Client
 import dev.coyotecage.pose.PoseFrame
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -34,9 +37,12 @@ class CageEngine(
     private val dglab: DglabV4Client,
     private val settings: () -> CageSettings,
     private val roi: () -> NormRect,
+    dispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
+    private val clock: () -> Long = SystemClock::uptimeMillis,
 ) {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // UI 操作与输出在主线程串行执行；姿态推理仍在相机线程运行。
+    private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val _ui = MutableStateFlow(EngineUi())
     val ui: StateFlow<EngineUi> = _ui.asStateFlow()
 
@@ -44,6 +50,8 @@ class CageEngine(
     private var latest: PoseFrame? = null
 
     private var job: Job? = null
+    private var testJob: Job? = null
+    private var outputChannel: Int? = null
     private var outsideMs = 0L
     private var lastShockAt = 0L
     private var wasViolating = false
@@ -58,56 +66,61 @@ class CageEngine(
         outsideMs = 0L
         lastShockAt = 0L
         wasViolating = false
-        startedAt = SystemClock.uptimeMillis()
-        _ui.update { it.copy(running = true, outsideMs = 0, violating = false) }
+        startedAt = clock()
+        testJob?.cancel()
+        testJob = null
+        _ui.update { it.copy(running = true, outsideMs = 0, violating = false, targetIntensity = 0) }
 
-        val channel = settings().channel
-        scope.launch { runCatching { dglab.zero(channel) } }
-        job = scope.launch { loop() }
+        job = scope.launch {
+            release()
+            loop()
+        }
     }
 
     fun stop() {
-        val wasRunning = job != null
         job?.cancel()
         job = null
-        if (wasRunning) {
-            val channel = settings().channel
-            scope.launch {
-                runCatching { dglab.clear(channel) }
-                runCatching { dglab.zero(channel) }
-            }
-        }
-        _ui.update { it.copy(running = false, outsideMs = 0, violating = false) }
+        testJob?.cancel()
+        testJob = null
+        scope.launch { release() }
+        _ui.update { it.copy(running = false, outsideMs = 0, violating = false, targetIntensity = 0) }
     }
 
     /** 用当前基础强度打一次，用来标定体感。 */
     fun testOnce() {
+        if (job?.isActive == true || testJob?.isActive == true) return
         val config = settings()
         val frames = config.framesForShock() ?: return
-        scope.launch {
-            runCatching {
+        testJob = scope.launch {
+            release()
+            try {
+                outputChannel = config.channel
                 dglab.setIntensity(config.safeBase, config.channel)
+                currentCoroutineContext().ensureActive()
                 dglab.pulse(frames, config.shockMs, config.channel)
                 delay(config.shockMs.toLong() + 150L)
-                dglab.clear(config.channel)
-                dglab.zero(config.channel)
+                release()
+            } catch (cancelled: CancellationException) {
+                // stop/start/emergency 负责清理，旧任务不能在新一轮输出后再归零。
+                throw cancelled
+            } catch (_: Exception) {
+                release()
             }
         }
     }
 
     /** 急停：立刻取消判定、清空波形、强度归零。 */
     fun emergency() {
-        job?.cancel()
-        job = null
-        _ui.update { it.copy(running = false, violating = false, outsideMs = 0) }
-        scope.launch { runCatching { dglab.emergencyStop() } }
+        stop()
     }
 
     private suspend fun loop() {
         while (currentCoroutineContext().isActive) {
-            val now = SystemClock.uptimeMillis()
+            val now = clock()
             val config = settings()
             val frame = latest
+
+            if (outputChannel != null && outputChannel != config.channel) release()
 
             val fresh = frame != null && (now - frame.timestampMs) in 0..POSE_TIMEOUT_MS
             val outside = fresh && frame != null && isOutside(frame, config)
@@ -125,7 +138,7 @@ class CageEngine(
                 lastShockAt = now
                 fire(config, target)
             } else if (!violating && wasViolating) {
-                release(config)
+                release()
             }
             wasViolating = violating
 
@@ -142,21 +155,24 @@ class CageEngine(
         }
     }
 
-    private fun fire(config: CageSettings, target: Int) {
+    private suspend fun fire(config: CageSettings, target: Int) {
         val frames = config.framesForShock() ?: return
-        scope.launch {
-            runCatching {
-                dglab.setIntensity(target, config.channel)
-                dglab.pulse(frames, config.shockMs, config.channel)
-            }
+        try {
+            outputChannel = config.channel
+            currentCoroutineContext().ensureActive()
+            dglab.setIntensity(target, config.channel)
+            currentCoroutineContext().ensureActive()
+            dglab.pulse(frames, config.shockMs, config.channel)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            release()
         }
     }
 
-    private fun release(config: CageSettings) {
-        scope.launch {
-            runCatching { dglab.clear(config.channel) }
-            runCatching { dglab.zero(config.channel) }
-        }
+    private suspend fun release() {
+        outputChannel = null
+        dglab.emergencyStop()
     }
 
     private fun isOutside(frame: PoseFrame, config: CageSettings): Boolean {
