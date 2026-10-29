@@ -157,7 +157,8 @@ web/index.html               网页版（单文件，MediaPipe Tasks JS）
 ## 10. 网页版（免安装）
 
 `web/index.html` 是同一套逻辑的浏览器实现：MediaPipe Tasks JS + getUserMedia + 同一个 V4 Socket 客户端。
-骨架连线、框选判定、输出节奏、波形配置都和安卓版一致，参数存 localStorage。
+骨架连线、三种判定模式（固定框 / 随机框 / 姿势锁定）、准备倒计时、输出节奏、波形配置都和安卓版一致，
+参数存 localStorage。
 
 必须通过 `http://localhost` 或 `https://` 打开，否则浏览器禁用摄像头：
 

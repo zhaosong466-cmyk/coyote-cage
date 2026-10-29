@@ -6,6 +6,7 @@
 <title>画地为牢 · Web</title>
 <style>
   * { box-sizing: border-box; }
+  .hidden { display: none !important; }
   html, body { margin: 0; height: 100%; background: #0b0b0d; color: #eee;
     font: 14px/1.45 -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
     -webkit-tap-highlight-color: transparent; }
@@ -129,6 +130,18 @@
         <option value="full">全身</option>
         <option value="feet">双脚</option>
       </select></label>
+    <label class="field">框模式
+      <select id="selFrame">
+        <option value="manual">固定框（手画）</option>
+        <option value="random">随机框</option>
+        <option value="pose">姿势锁定</option>
+      </select></label>
+    <label class="field"><span class="line">开局准备倒计时 (秒) <output id="oPrepare"></output></span>
+      <input type="range" id="rPrepare" min="0" max="10" step="1" /></label>
+    <label class="field hidden" id="rowRandom"><span class="line">随机间隔 (秒) <output id="oRandom"></output></span>
+      <input type="range" id="rRandom" min="5" max="60" step="1" /></label>
+    <label class="field hidden" id="rowPose"><span class="line">姿势容差 (% 画面高度) <output id="oPoseTol"></output></span>
+      <input type="range" id="rPoseTol" min="1" max="12" step="1" /></label>
     <label class="field">输出通道
       <select id="selChannel"><option value="0">A</option><option value="1">B</option></select></label>
 
@@ -202,6 +215,7 @@ const DEFAULTS = {
   base: 5, max: 25, step: 2, escalate: true, everySec: 5,
   shockMs: 600, gapMs: 1500, graceMs: 400,
   pointSet: 'torso', channel: 0,
+  frameMode: 'manual', randomEverySec: 15, prepareSec: 3, poseTolerance: 3,
   waveform: PRESETS['轻叩'],
   relay: 'wss://trex.dungeon-lab.cn/v4',
 };
@@ -224,6 +238,13 @@ let outsideMs = 0;
 let lastShockAt = 0;
 let wasViolating = false;
 let violating = false;
+
+// 姿势锁定 / 准备倒计时 / 随机框
+let prepareEndsAt = 0;
+let prepareRemaining = 0;
+let referencePose = null;
+let nextRandomAt = 0;
+let lastQuadrant = -1;
 
 let selecting = false;
 let dragStart = null;
@@ -657,28 +678,34 @@ function draw() {
     ctx.strokeRect(3, 3, w - 6, h - 6);
   }
 
-  // 判定框
+  // 判定框（姿势模式没有框）
+  const showBox = S.frameMode !== 'pose';
   const a = toPx(roi.l, roi.t);
   const b = toPx(roi.r, roi.b);
   const x = Math.min(a.x, b.x);
   const y = Math.min(a.y, b.y);
   const rw = Math.abs(b.x - a.x);
   const rh = Math.abs(b.y - a.y);
-  ctx.fillStyle = violating ? 'rgba(255,59,48,.10)' : 'rgba(52,199,89,.08)';
-  ctx.fillRect(x, y, rw, rh);
-  ctx.setLineDash(selecting ? [10, 8] : []);
-  ctx.strokeStyle = violating ? '#ff3b30' : '#34c759';
-  ctx.lineWidth = 3;
-  ctx.strokeRect(x, y, rw, rh);
-  ctx.setLineDash([]);
+  if (showBox) {
+    ctx.fillStyle = violating ? 'rgba(255,59,48,.10)' : 'rgba(52,199,89,.08)';
+    ctx.fillRect(x, y, rw, rh);
+    ctx.setLineDash(selecting ? [10, 8] : []);
+    ctx.strokeStyle = violating ? '#ff3b30' : '#34c759';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x, y, rw, rh);
+    ctx.setLineDash([]);
+  }
 
-  // 骨架
+  // 骨架：框模式按是否在框内变色，姿势模式按是否越界变色
   const pts = latest ? latest.points : [];
   if (pts.length) {
     const px = pts.map((p) => {
       if (!p || (p.visibility !== undefined && p.visibility < 0.4)) return null;
       const d = toDisplay(p);
-      return { pt: toPx(d.x, d.y), inside: d.x >= roi.l && d.x <= roi.r && d.y >= roi.t && d.y <= roi.b };
+      const inside = showBox
+        ? (d.x >= roi.l && d.x <= roi.r && d.y >= roi.t && d.y <= roi.b)
+        : !violating;
+      return { pt: toPx(d.x, d.y), inside };
     });
 
     ctx.lineWidth = 3;
@@ -701,6 +728,19 @@ function draw() {
       ctx.arc(p.pt.x, p.pt.y, 4.5, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  // 准备倒计时
+  if (prepareRemaining > 0) {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 84px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
+    ctx.fillText(String(Math.ceil(prepareRemaining / 1000)), w / 2, h / 2);
+    ctx.font = '14px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
+    ctx.fillText(S.frameMode === 'pose' ? '摆好姿势' : '准备', w / 2, h / 2 + 62);
+    ctx.restore();
   }
 
   // 拖拽预览
@@ -727,6 +767,62 @@ function isOutside(points) {
     if (d.x < roi.l || d.x > roi.r || d.y < roi.t || d.y > roi.b) return true;
   }
   return false;
+}
+
+/** 当前姿态与基准的最大偏差，按画面高度归一；可比对点不足 2 个返回 -1。 */
+function maxDeviation(reference, current) {
+  const vw = video.videoWidth || 640;
+  const vh = video.videoHeight || 480;
+  const indices = POINT_SETS[S.pointSet] || POINT_SETS.torso;
+  let max = -1;
+  let compared = 0;
+  for (const i of indices) {
+    const base = reference[i];
+    const now = current[i];
+    if (!base || !now) continue;
+    if ((base.visibility ?? 1) < 0.4 || (now.visibility ?? 1) < 0.4) continue;
+    const dx = (base.x - now.x) * vw;
+    const dy = (base.y - now.y) * vh;
+    const d = Math.hypot(dx, dy) / vh;
+    compared++;
+    if (d > max) max = d;
+  }
+  return compared >= 2 ? max : -1;
+}
+
+function usablePose(points) {
+  if (!points || points.length < 33) return false;
+  const indices = POINT_SETS[S.pointSet] || POINT_SETS.torso;
+  let visible = 0;
+  for (const i of indices) {
+    const p = points[i];
+    if (!p) continue;
+    if ((p.visibility ?? 1) >= 0.4) visible++;
+  }
+  return visible >= 2;
+}
+
+// 随机框：画面四等分，新框不在上一个象限；上半屏概率 10%
+const TOP_QUADRANT_CHANCE = 0.10;
+
+function quadrantOf(rect) {
+  const cx = (rect.l + rect.r) / 2;
+  const cy = (rect.t + rect.b) / 2;
+  return (cy < 0.5 ? 0 : 2) + (cx < 0.5 ? 0 : 1);
+}
+
+function randomRect(previous, rnd) {
+  const top = rnd() < TOP_QUADRANT_CHANCE;
+  const base = top ? 0 : 2;
+  let quadrant = base + Math.floor(rnd() * 2);
+  if (quadrant === previous) quadrant = base + ((quadrant - base + 1) % 2);
+  const width = 0.16 + rnd() * (0.46 - 0.16);
+  const height = 0.18 + rnd() * (0.46 - 0.18);
+  const cellX = (quadrant % 2) * 0.5;
+  const cellY = Math.floor(quadrant / 2) * 0.5;
+  const left = cellX + rnd() * (0.5 - width);
+  const topY = cellY + rnd() * (0.5 - height);
+  return { rect: { l: left, t: topY, r: left + width, b: topY + height }, quadrant };
 }
 
 async function fire(target) {
@@ -756,6 +852,9 @@ function stopOutput() {
   outsideMs = 0;
   violating = false;
   wasViolating = false;
+  prepareEndsAt = 0;
+  prepareRemaining = 0;
+  referencePose = null;
   cancelTest();
   release();
   $('btnRun').textContent = '开始';
@@ -768,10 +867,49 @@ setInterval(() => {
   const now = performance.now();
   const f = latest;
   const fresh = !!f && now - f.ts < 900 && f.points && f.points.length > 0;
-  const out = fresh && isOutside(f.points);
 
+  // 开局准备倒计时：只走界面，不判定
+  if (prepareEndsAt > now) {
+    prepareRemaining = prepareEndsAt - now;
+    outsideMs = 0;
+    wasViolating = false;
+    violating = false;
+    $('meter').innerHTML = `倒计时 <b>${Math.ceil(prepareRemaining / 1000)}</b>s`;
+    $('phase').textContent = '准备中';
+    $('phase').style.color = '#34c759';
+    return;
+  }
+  prepareRemaining = 0;
+
+  // 随机框到点换位置
+  if (S.frameMode === 'random' && now >= nextRandomAt) {
+    const next = randomRect(lastQuadrant, Math.random);
+    lastQuadrant = next.quadrant;
+    roi = next.rect;
+    nextRandomAt = now + Math.max(5, S.randomEverySec) * 1000;
+  }
+
+  let out = false;
+  let deviation = 0;
+
+  if (S.frameMode === 'pose') {
+    if (!referencePose) {
+      // 倒计时结束，抓第一帧可用姿态当基准
+      if (fresh && usablePose(f.points)) {
+        referencePose = f.points.map((p) => ({ x: p.x, y: p.y, visibility: p.visibility }));
+      }
+    } else if (fresh) {
+      deviation = maxDeviation(referencePose, f.points);
+      out = deviation >= 0 && deviation > S.poseTolerance / 100;
+    }
+  } else {
+    out = fresh && isOutside(f.points);
+  }
+
+  // 随机框和姿势锁定都没有容忍时间
+  const grace = (S.frameMode === 'random' || S.frameMode === 'pose') ? 0 : S.graceMs;
   outsideMs = out ? outsideMs + 60 : 0;
-  violating = out && outsideMs >= S.graceMs;
+  violating = out && outsideMs >= grace;
   const target = targetFor(outsideMs);
 
   if (violating && now - lastShockAt >= S.shockMs + S.gapMs) {
@@ -782,9 +920,18 @@ setInterval(() => {
   }
   wasViolating = violating;
 
-  $('meter').innerHTML = `越界 <b>${(outsideMs / 1000).toFixed(1)}</b>s · 目标强度 <b>${target}</b>`;
-  $('phase').textContent = violating ? '越界中' : running ? (fresh ? '监守中' : '没检测到人') : '未开始';
-  $('phase').style.color = violating ? '#ff3b30' : running && fresh ? '#34c759' : '#9e9e9e';
+  if (S.frameMode === 'pose') {
+    $('meter').innerHTML =
+      `偏差 <b>${deviation.toFixed(1)}</b>% / 容差 <b>${S.poseTolerance}</b>% · 强度 <b>${target}</b>`;
+  } else if (S.frameMode === 'random') {
+    const left = Math.max(0, Math.ceil((nextRandomAt - now) / 1000));
+    $('meter').innerHTML =
+      `越界 <b>${(outsideMs / 1000).toFixed(1)}</b>s · 强度 <b>${target}</b> · 下一个框 <b>${left}</b>s`;
+  } else {
+    $('meter').innerHTML = `越界 <b>${(outsideMs / 1000).toFixed(1)}</b>s · 目标强度 <b>${target}</b>`;
+  }
+  $('phase').textContent = violating ? '越界中' : (fresh ? '监守中' : '没检测到人');
+  $('phase').style.color = violating ? '#ff3b30' : (fresh ? '#34c759' : '#9e9e9e');
 }, 60);
 
 // ============================================================ 顶部状态
@@ -853,6 +1000,16 @@ $('btnRun').onclick = () => {
     outsideMs = 0;
     lastShockAt = 0;
     wasViolating = false;
+    violating = false;
+    referencePose = null;
+    prepareEndsAt = performance.now() + Math.max(0, S.prepareSec) * 1000;
+    prepareRemaining = Math.max(0, prepareEndsAt - performance.now());
+    if (S.frameMode === 'random') {
+      const next = randomRect(lastQuadrant, Math.random);
+      lastQuadrant = next.quadrant;
+      roi = next.rect;
+      nextRandomAt = performance.now() + Math.max(5, S.randomEverySec) * 1000;
+    }
   }
   $('btnRun').textContent = running ? '停止' : '开始';
   $('btnRun').classList.toggle('danger', running);
@@ -919,6 +1076,20 @@ function bindSelect(id, key, toValue = (v) => v) {
   });
 }
 
+/** 按框模式显示/隐藏对应参数，并禁用不适用的按钮。 */
+function syncFrameRows() {
+  const mode = S.frameMode;
+  $('rowRandom').classList.toggle('hidden', mode !== 'random');
+  $('rowPose').classList.toggle('hidden', mode !== 'pose');
+  const sel = $('btnSel');
+  if (sel) sel.disabled = mode !== 'manual';
+  if (mode !== 'manual' && selecting) {
+    selecting = false;
+    if (sel) sel.textContent = '框选';
+    setHint('', false);
+  }
+}
+
 function initSettingsUI() {
   bindRange('rBase', 'oBase', 'base');
   bindRange('rMax', 'oMax', 'max');
@@ -927,6 +1098,9 @@ function initSettingsUI() {
   bindRange('rShock', 'oShock', 'shockMs');
   bindRange('rGap', 'oGap', 'gapMs');
   bindRange('rGrace', 'oGrace', 'graceMs');
+  bindRange('rPrepare', 'oPrepare', 'prepareSec');
+  bindRange('rRandom', 'oRandom', 'randomEverySec');
+  bindRange('rPoseTol', 'oPoseTol', 'poseTolerance');
 
   const esc = $('cEsc');
   esc.checked = S.escalate;
@@ -934,6 +1108,9 @@ function initSettingsUI() {
 
   bindSelect('selPoint', 'pointSet');
   bindSelect('selChannel', 'channel', (v) => parseInt(v, 10));
+  bindSelect('selFrame', 'frameMode');
+  $('selFrame').addEventListener('change', syncFrameRows);
+  syncFrameRows();
 
   const wave = $('txtWave');
   const err = $('waveErr');

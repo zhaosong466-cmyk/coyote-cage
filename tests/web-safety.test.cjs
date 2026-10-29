@@ -127,7 +127,7 @@ test('emergency cancels test cleanup and leaves no later output', async () => {
 test('starting monitoring cancels test cleanup even after a channel change', async () => {
   const p = page();
   await p.elements.get('btnTest').onclick();
-  p.run('S.channel = 1; S.graceMs = 0;');
+  p.run('S.channel = 1; S.graceMs = 0; S.prepareSec = 0;');
   p.elements.get('btnRun').onclick();
   p.advance(1000);
   pose(p, 0.95);
@@ -146,4 +146,46 @@ test('repeated tests and tests during monitoring do not overlap', async () => {
   p.elements.get('btnRun').onclick();
   await p.elements.get('btnTest').onclick();
   assert.equal(pulses(p).length, 1);
+});
+
+test('prepare countdown blocks judging until it ends', () => {
+  const p = page();
+  p.run('S.graceMs = 0; S.prepareSec = 3; S.frameMode = "manual";');
+  p.elements.get('btnRun').onclick();
+  pose(p, 0.95);
+  p.tick(1000);
+  assert.ok(p.run('prepareRemaining') > 0);
+  assert.equal(pulses(p).length, 0);
+  assert.equal(p.run('violating'), false);
+
+  p.tick(1000);
+  p.tick(1000);
+  assert.equal(pulses(p).length, 0);
+
+  pose(p, 0.95);
+  p.tick(60);
+  assert.equal(pulses(p).length, 1);
+});
+
+test('pose mode locks the reference and punishes movement', () => {
+  const p = page();
+  p.run('S.prepareSec = 0; S.frameMode = "pose"; S.poseTolerance = 3;');
+
+  p.elements.get('btnRun').onclick();
+  pose(p, 0.5);
+  p.tick(60);
+  assert.equal(p.run('referencePose !== null'), true);
+  assert.equal(pulses(p).length, 0);
+
+  // 横向 2% ≈ 12.8px / 480 ≈ 2.7%，在 3% 容差内
+  pose(p, 0.52);
+  p.tick(60);
+  assert.equal(pulses(p).length, 0);
+  assert.equal(p.run('violating'), false);
+
+  // 横向 20% ≈ 128px / 480 ≈ 26%，超容差
+  pose(p, 0.7);
+  p.tick(60);
+  assert.equal(pulses(p).length, 1);
+  assert.equal(p.run('violating'), true);
 });
