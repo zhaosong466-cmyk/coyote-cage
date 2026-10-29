@@ -3,179 +3,271 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-<title>画地为牢 · Web</title>
+<meta name="theme-color" content="#08090b" />
+<title>画地为牢 · ZONE</title>
 <style>
-  * { box-sizing: border-box; }
-  .hidden { display: none !important; }
-  html, body { margin: 0; height: 100%; background: #0b0b0d; color: #eee;
-    font: 14px/1.45 -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-    -webkit-tap-highlight-color: transparent; }
-  #app { display: flex; flex-direction: column; height: 100dvh; }
+  :root{
+    --ink:#08090B; --panel:#0E1013; --raise:#14171B;
+    --line:rgba(233,230,222,.12); --line-2:rgba(233,230,222,.30);
+    --bone:#E9E6DE; --dim:#8B9099;
+    --mint:#6FE3A4; --signal:#FF4B1F; --amber:#F2B33D;
+  }
+  *{box-sizing:border-box}
+  .hidden{display:none!important}
+  html,body{margin:0;height:100%;background:var(--ink);color:var(--bone);
+    font:14px/1.45 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-tap-highlight-color:transparent;overscroll-behavior:none}
+  #app{display:flex;flex-direction:column;height:100dvh}
 
-  header { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #151517; }
-  .brand { font-weight: 700; letter-spacing: .5px; white-space: nowrap; }
-  .tag { font-size: 11px; color: #0b0b0d; background: #34c759; border-radius: 4px; padding: 1px 5px; margin-left: 4px; vertical-align: 2px; }
-  .status { flex: 1; color: #9e9e9e; font-size: 12px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* ---------------- 顶栏 ---------------- */
+  .bar{display:flex;align-items:center;gap:12px;
+    padding:calc(8px + env(safe-area-inset-top)) 14px 8px;
+    background:var(--panel);border-bottom:1px solid var(--line)}
+  .brand{font-weight:700;font-size:15px;white-space:nowrap}
+  .brand .sub{margin-left:8px;vertical-align:2px;color:var(--dim);
+    font:600 9px/1 ui-monospace,Consolas,monospace;letter-spacing:.22em;
+    border:1px solid var(--line);padding:3px 6px;border-radius:2px}
+  .status{flex:1;min-width:0;text-align:right;color:var(--dim);
+    font:11px/1.3 ui-monospace,Consolas,monospace;letter-spacing:.02em;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-  .stage { position: relative; flex: 1; background: #000; overflow: hidden; }
-  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
-  canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
-  .hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-    background: rgba(0,0,0,.72); padding: 10px 14px; border-radius: 10px;
-    font-size: 13px; color: #ccc; max-width: 86%; text-align: center; line-height: 1.6; }
-  .hint.hidden { display: none; }
+  /* ---------------- 按键 ---------------- */
+  .key{appearance:none;border:1px solid var(--line);background:var(--raise);color:var(--bone);
+    font:500 13px/1 inherit;letter-spacing:.02em;padding:11px 14px;border-radius:2px;
+    cursor:pointer;transition:background .12s,border-color .12s,color .12s}
+  .key:hover{border-color:var(--line-2)}
+  .key:active{transform:translateY(1px)}
+  .key:disabled{opacity:.3;cursor:not-allowed}
+  .key.ghost{background:transparent}
+  .key.sm{padding:7px 12px;font-size:12px}
+  .key.primary{background:var(--bone);border-color:var(--bone);color:#0A0B0C;font-weight:600}
+  /* 运行中「开始」变「停止」：只描边，避免和急停抢红色 */
+  .key.primary.danger{background:transparent;border-color:var(--line-2);color:var(--bone)}
+  .key.stop{flex:0 0 auto;background:var(--signal);border-color:var(--signal);
+    color:#fff;font-weight:600}
 
-  footer { padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: #151517;
-    display: flex; flex-direction: column; gap: 8px; }
-  .row { display: flex; align-items: center; gap: 8px; }
-  .meta { color: #9e9e9e; font-size: 12px; }
-  .meta b { color: #eee; font-weight: 600; }
+  /* ---------------- 取景器 ---------------- */
+  .stage{position:relative;flex:1;min-height:0;background:#000;overflow:hidden}
+  /* 运行中的「指示灯」：舞台顶部一条琥珀色细线 */
+  .tally{position:absolute;top:0;left:0;right:0;height:2px;z-index:2;
+    background:transparent;transition:background .18s,box-shadow .18s}
+  .stage.live .tally{background:var(--amber);box-shadow:0 0 14px rgba(242,179,61,.55)}
+  .stage video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+  .stage canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+  .vignette{position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(115% 85% at 50% 45%,transparent 52%,rgba(0,0,0,.55) 100%)}
+  .brackets{position:absolute;inset:0;pointer-events:none}
+  .brackets i{position:absolute;width:20px;height:20px;border:1.5px solid rgba(233,230,222,.32)}
+  .brackets i:nth-child(1){top:10px;left:10px;border-right:0;border-bottom:0}
+  .brackets i:nth-child(2){top:10px;right:10px;border-left:0;border-bottom:0}
+  .brackets i:nth-child(3){bottom:10px;left:10px;border-right:0;border-top:0}
+  .brackets i:nth-child(4){bottom:10px;right:10px;border-left:0;border-top:0}
 
-  button { font: inherit; padding: 9px 12px; border-radius: 10px; border: 1px solid #3a3a3e;
-    background: #232327; color: #eee; cursor: pointer; }
-  button:active { transform: translateY(1px); }
-  button.primary { background: #2f6fed; border-color: #2f6fed; }
-  button.danger { background: #e0342c; border-color: #e0342c; font-weight: 600; flex: 1; }
-  button:disabled { opacity: .45; cursor: not-allowed; }
-  .grow { flex: 1; }
-  .stack { display: flex; gap: 8px; }
-  .stack > button { flex: 1; }
+  .hud{position:absolute;pointer-events:none;display:flex;align-items:baseline;gap:8px;
+    font:11px/1.35 ui-monospace,Consolas,monospace;letter-spacing:.06em;
+    text-shadow:0 1px 3px rgba(0,0,0,.9)}
+  .hud-tl{top:16px;left:22px}
+  .hud-bl{bottom:16px;left:22px;max-width:calc(100% - 44px);flex-wrap:wrap}
+  .hud .lbl{font-size:9px;letter-spacing:.24em;color:rgba(233,230,222,.42)}
+  #phase{color:var(--bone);font-weight:600}
+  #meter{color:var(--dim)}
+  #meter b{color:var(--amber);font-weight:600}
 
-  dialog { border: none; border-radius: 16px; padding: 0; background: #1a1a1d; color: #eee;
-    width: min(520px, 94vw); }
-  dialog::backdrop { background: rgba(0,0,0,.65); }
-  .sheet { padding: 16px; display: flex; flex-direction: column; gap: 12px; max-height: 82dvh; overflow: auto; }
-  .sheet h2 { margin: 0; font-size: 16px; }
-  .sheet h3 { margin: 6px 0 0; font-size: 13px; color: #34c759; font-weight: 600; }
-  .field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
-  .field .line { display: flex; justify-content: space-between; }
-  .field .line output { color: #9e9e9e; }
-  input[type=range] { width: 100%; accent-color: #34c759; }
-  select, input[type=text], textarea {
-    background: #111114; color: #eee; border: 1px solid #3a3a3e; border-radius: 8px;
-    padding: 8px; font: inherit; width: 100%; }
-  textarea { font-family: ui-monospace, Consolas, monospace; font-size: 12px; min-height: 108px; resize: vertical; }
-  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
-  .chips button { padding: 6px 10px; font-size: 12px; }
-  .err { color: #ff5b52; font-size: 12px; }
-  .err.hidden { display: none; }
-  .checkline { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
-  .checkline input { width: 18px; height: 18px; accent-color: #34c759; }
+  .hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none;
+    max-width:86%;padding:10px 14px;border:1px solid var(--line);border-radius:2px;
+    background:rgba(8,9,11,.82);color:var(--bone);font-size:12px;line-height:1.7;
+    text-align:center;backdrop-filter:blur(4px)}
 
-  #qrBox { display: flex; flex-direction: column; align-items: center; gap: 10px; }
-  #qrHolder { background: #fff; border-radius: 8px; width: 240px; height: 240px;
-    display: flex; align-items: center; justify-content: center; overflow: hidden; }
-  #qrHolder.hidden, #qrFallback.hidden { display: none; }
-  #pairUrl { font-size: 10px; color: #9e9e9e; word-break: break-all; text-align: center; }
+  /* ---------------- 控制带 ---------------- */
+  .strip{display:flex;justify-content:center;gap:8px;
+    padding:10px 12px calc(10px + env(safe-area-inset-bottom));
+    background:var(--panel);border-top:1px solid var(--line)}
+  .strip .key{flex:1 1 0;max-width:170px}
+  .strip .key.primary{flex:1.4 1 0;max-width:200px}
+  .strip .key.stop{flex:0 0 110px;max-width:110px}
+  @media (max-width:520px){
+    .key{padding:11px 8px;font-size:12px}
+    .strip .key.primary{flex:1.3 1 0;max-width:none}
+    .strip .key.stop{flex:0 0 76px}
+  }
+
+  /* ---------------- 面板 ---------------- */
+  dialog{border:1px solid var(--line-2);background:var(--panel);color:var(--bone);
+    padding:0;border-radius:3px;width:min(720px,94vw)}
+  dialog::backdrop{background:rgba(4,5,6,.76);backdrop-filter:blur(3px)}
+  .sheet{display:flex;flex-direction:column;max-height:88dvh}
+  .sheet-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:14px 18px;border-bottom:1px solid var(--line)}
+  .sheet-head h2{margin:0;color:var(--dim);text-transform:uppercase;
+    font:600 10px/1 ui-monospace,Consolas,monospace;letter-spacing:.26em}
+  .sheet-body{padding:2px 18px 20px;overflow:auto}
+  .sheet-body section{padding-top:18px}
+  .sheet-body h3{margin:0 0 12px;color:rgba(233,230,222,.52);text-transform:uppercase;
+    font:600 9px/1 ui-monospace,Consolas,monospace;letter-spacing:.26em}
+
+  .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px 22px}
+  .field{display:block;min-width:0;font-size:12px}
+  .field .line{display:flex;align-items:baseline;justify-content:space-between;
+    gap:10px;margin-bottom:7px}
+  .field .line span:first-child{color:var(--dim)}
+  .field output{min-width:36px;padding:3px 7px;border-radius:2px;text-align:right;
+    color:var(--amber);background:rgba(242,179,61,.07);border:1px solid rgba(242,179,61,.28);
+    font:600 11px/1 ui-monospace,Consolas,monospace}
+  input[type=range]{width:100%;height:20px;accent-color:var(--bone);background:transparent}
+  select,input[type=text],textarea{width:100%;padding:9px;border-radius:2px;
+    border:1px solid var(--line);background:#0A0C0E;color:var(--bone);font:inherit}
+  select:focus,input[type=text]:focus,textarea:focus{outline:none;border-color:var(--line-2)}
+  textarea{min-height:110px;resize:vertical;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+  .checkline{display:flex;flex-direction:row-reverse;align-items:center;
+    justify-content:flex-end;gap:10px;font-size:12px;color:var(--dim)}
+  .checkline input{width:18px;height:18px;accent-color:var(--mint)}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+  .chips button{padding:7px 12px;border-radius:2px;border:1px solid var(--line);
+    background:transparent;color:var(--bone);font:500 12px/1 inherit;cursor:pointer}
+  .chips button:hover{border-color:var(--line-2)}
+  .err{margin-top:6px;color:var(--signal);font-size:11px}
+  .actions{display:flex;gap:10px;margin-top:22px}
+  .actions .key{flex:1}
+
+  #qrBox{display:flex;flex-direction:column;align-items:center;gap:12px;padding-top:8px}
+  #qrHolder{width:232px;height:232px;background:#fff;display:flex;
+    align-items:center;justify-content:center;overflow:hidden}
+  #pairUrl{text-align:center;word-break:break-all;color:var(--dim);
+    font:10px/1.4 ui-monospace,Consolas,monospace}
 </style>
 </head>
 <body>
 <div id="app">
-  <header>
-    <div class="brand">画地为牢<span class="tag">WEB</span></div>
+  <header class="bar">
+    <div class="brand">画地为牢<span class="sub">ZONE</span></div>
     <div class="status" id="status">未连接</div>
-    <button id="btnConn">连接</button>
+    <button id="btnConn" class="key ghost sm">连接</button>
   </header>
 
   <div class="stage" id="stage">
     <video id="video" playsinline muted autoplay></video>
     <canvas id="overlay"></canvas>
+    <div class="tally" aria-hidden="true"></div>
+    <div class="vignette" aria-hidden="true"></div>
+    <div class="brackets" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div class="hud hud-tl"><span class="lbl">STATE</span><span id="phase">未开始</span></div>
+    <div class="hud hud-bl" id="meter"></div>
     <div class="hint" id="hint">正在启动摄像头…</div>
   </div>
 
-  <footer>
-    <div class="row">
-      <span class="meta" id="phase">未开始</span>
-      <span class="meta grow" id="meter"></span>
-    </div>
-    <div class="row stack">
-      <button id="btnRun" class="primary" disabled>开始</button>
-      <button id="btnSel">框选</button>
-      <button id="btnCam">镜头</button>
-      <button id="btnSet">设置</button>
-    </div>
-    <div class="row">
-      <button id="btnStop" class="danger">急停（清空波形并归零）</button>
-    </div>
+  <footer class="strip">
+    <button id="btnRun" class="key primary" disabled>开始</button>
+    <button id="btnSel" class="key">框选</button>
+    <button id="btnCam" class="key">镜头</button>
+    <button id="btnSet" class="key">设置</button>
+    <button id="btnStop" class="key stop" title="清空波形并归零">急停</button>
   </footer>
 </div>
 
 <dialog id="dlgSet">
   <div class="sheet">
-    <h2>参数</h2>
+    <header class="sheet-head">
+      <h2>参数</h2>
+      <button id="btnCloseSet" class="key ghost sm">关闭</button>
+    </header>
+    <div class="sheet-body">
 
-    <h3>强度</h3>
-    <label class="field"><span class="line">基础强度 <output id="oBase"></output></span>
-      <input type="range" id="rBase" min="1" max="40" step="1" /></label>
-    <label class="field"><span class="line">强度上限 <output id="oMax"></output></span>
-      <input type="range" id="rMax" min="1" max="100" step="1" /></label>
-    <label class="field"><span class="line">每级递增 <output id="oStep"></output></span>
-      <input type="range" id="rStep" min="1" max="10" step="1" /></label>
-    <label class="checkline">随越界时间递增 <input type="checkbox" id="cEsc" /></label>
-    <label class="field"><span class="line">每 N 秒涨一级 <output id="oEvery"></output></span>
-      <input type="range" id="rEvery" min="1" max="30" step="1" /></label>
+      <section>
+        <h3>强度</h3>
+        <div class="fields">
+          <label class="field"><span class="line"><span>基础强度</span><output id="oBase"></output></span>
+            <input type="range" id="rBase" min="1" max="40" step="1" /></label>
+          <label class="field"><span class="line"><span>强度上限</span><output id="oMax"></output></span>
+            <input type="range" id="rMax" min="1" max="100" step="1" /></label>
+          <label class="field"><span class="line"><span>每级递增</span><output id="oStep"></output></span>
+            <input type="range" id="rStep" min="1" max="10" step="1" /></label>
+          <label class="field"><span class="line"><span>每 N 秒涨一级</span><output id="oEvery"></output></span>
+            <input type="range" id="rEvery" min="1" max="30" step="1" /></label>
+          <label class="checkline">随越界时间递增 <input type="checkbox" id="cEsc" /></label>
+        </div>
+      </section>
 
-    <h3>时机</h3>
-    <label class="field"><span class="line">单次电击时长 (ms) <output id="oShock"></output></span>
-      <input type="range" id="rShock" min="100" max="3000" step="50" /></label>
-    <label class="field"><span class="line">两次间隔 (ms) <output id="oGap"></output></span>
-      <input type="range" id="rGap" min="200" max="10000" step="100" /></label>
-    <label class="field"><span class="line">越界容忍 (ms) <output id="oGrace"></output></span>
-      <input type="range" id="rGrace" min="0" max="1500" step="50" /></label>
+      <section>
+        <h3>时机</h3>
+        <div class="fields">
+          <label class="field"><span class="line"><span>单次输出 (ms)</span><output id="oShock"></output></span>
+            <input type="range" id="rShock" min="100" max="3000" step="50" /></label>
+          <label class="field"><span class="line"><span>两次间隔 (ms)</span><output id="oGap"></output></span>
+            <input type="range" id="rGap" min="200" max="10000" step="100" /></label>
+          <label class="field"><span class="line"><span>越界容忍 (ms)</span><output id="oGrace"></output></span>
+            <input type="range" id="rGrace" min="0" max="1500" step="50" /></label>
+        </div>
+      </section>
 
-    <h3>判定</h3>
-    <label class="field">检测部位
-      <select id="selPoint">
-        <option value="torso">躯干（双肩 + 双髋）</option>
-        <option value="full">全身</option>
-        <option value="feet">双脚</option>
-      </select></label>
-    <label class="field">框模式
-      <select id="selFrame">
-        <option value="manual">固定框（手画）</option>
-        <option value="random">随机框</option>
-        <option value="pose">姿势锁定</option>
-      </select></label>
-    <label class="field"><span class="line">开局准备倒计时 (秒) <output id="oPrepare"></output></span>
-      <input type="range" id="rPrepare" min="0" max="10" step="1" /></label>
-    <label class="field hidden" id="rowRandom"><span class="line">随机间隔 (秒) <output id="oRandom"></output></span>
-      <input type="range" id="rRandom" min="5" max="60" step="1" /></label>
-    <label class="field hidden" id="rowPose"><span class="line">姿势容差 (% 画面高度) <output id="oPoseTol"></output></span>
-      <input type="range" id="rPoseTol" min="1" max="12" step="1" /></label>
-    <label class="field">输出通道
-      <select id="selChannel"><option value="0">A</option><option value="1">B</option></select></label>
+      <section>
+        <h3>判定</h3>
+        <div class="fields">
+          <label class="field">检测部位
+            <select id="selPoint">
+              <option value="torso">躯干（双肩 + 双髋）</option>
+              <option value="full">全身</option>
+              <option value="feet">双脚</option>
+            </select></label>
+          <label class="field">框模式
+            <select id="selFrame">
+              <option value="manual">固定框（手画）</option>
+              <option value="random">随机框</option>
+              <option value="pose">姿势锁定</option>
+            </select></label>
+          <label class="field">输出通道
+            <select id="selChannel"><option value="0">A</option><option value="1">B</option></select></label>
+          <label class="field"><span class="line"><span>开局准备倒计时 (秒)</span><output id="oPrepare"></output></span>
+            <input type="range" id="rPrepare" min="0" max="10" step="1" /></label>
+          <label class="field hidden" id="rowRandom"><span class="line"><span>随机间隔 (秒)</span><output id="oRandom"></output></span>
+            <input type="range" id="rRandom" min="5" max="60" step="1" /></label>
+          <label class="field hidden" id="rowPose"><span class="line"><span>姿势容差 (% 画面高度)</span><output id="oPoseTol"></output></span>
+            <input type="range" id="rPoseTol" min="1" max="12" step="1" /></label>
+        </div>
+      </section>
 
-    <h3>波形</h3>
-    <div class="chips" id="presetRow"></div>
-    <label class="field">每行 16 位 HEX，一帧 = 8 字节 = 100ms
-      <textarea id="txtWave" spellcheck="false"></textarea></label>
-    <div class="err hidden" id="waveErr">格式不对：每行必须正好 16 个十六进制字符</div>
+      <section>
+        <h3>波形</h3>
+        <div class="chips" id="presetRow"></div>
+        <label class="field"><span class="line"><span>每行 16 位 HEX · 一帧 8 字节 · 100ms</span></span>
+          <textarea id="txtWave" spellcheck="false"></textarea></label>
+        <div class="err hidden" id="waveErr">格式不对：每行必须正好 16 个十六进制字符</div>
+      </section>
 
-    <h3>连接</h3>
-    <label class="field">中继地址
-      <input type="text" id="txtRelay" spellcheck="false" /></label>
+      <section>
+        <h3>连接</h3>
+        <div class="fields">
+          <label class="field">中继地址
+            <input type="text" id="txtRelay" spellcheck="false" /></label>
+        </div>
+      </section>
 
-    <div class="row stack">
-      <button id="btnTest">用当前强度试一次</button>
-      <button id="btnCloseSet" class="primary">关闭</button>
+      <div class="actions">
+        <button id="btnTest" class="key">用当前强度试一次</button>
+      </div>
     </div>
   </div>
 </dialog>
 
 <dialog id="dlgQr">
   <div class="sheet">
-    <h2>用 DG-LAB 4 APP 扫码</h2>
-    <div id="qrBox">
-      <div id="qrHolder"></div>
-      <div id="qrFallback" class="err hidden">二维码库没加载出来，用下面的链接。</div>
-      <div id="pairUrl"></div>
-      <div class="row stack" style="width:100%">
-        <button id="btnCopyPair">复制配对链接</button>
-        <button id="btnCopyDeep">复制扫码链接</button>
+    <header class="sheet-head">
+      <h2>配对</h2>
+    </header>
+    <div class="sheet-body">
+      <div id="qrBox">
+        <div id="qrHolder"></div>
+        <div id="qrFallback" class="err hidden">二维码库没加载出来，用下面的链接。</div>
+        <div id="pairUrl"></div>
+        <div class="actions" style="width:100%;margin-top:4px">
+          <button id="btnCopyPair" class="key">复制配对链接</button>
+          <button id="btnCopyDeep" class="key">复制扫码链接</button>
+        </div>
+        <div class="status" style="text-align:center;white-space:normal">APP 内：设置 → Socket 控制 → 扫码</div>
+        <div class="actions" style="width:100%;margin-top:8px">
+          <button id="btnCloseQr" class="key primary">关闭</button>
+        </div>
       </div>
-      <div class="meta" style="text-align:center">APP 内：设置 → Socket 控制 → 扫码</div>
     </div>
-    <button id="btnCloseQr" class="primary">关闭</button>
   </div>
 </dialog>
 
@@ -667,18 +759,32 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 
+/** 四角括号路径（取景器语言，判定框和越界框共用）。 */
+function cornerPath(x, y, w, h, len) {
+  ctx.beginPath();
+  ctx.moveTo(x, y + len); ctx.lineTo(x, y); ctx.lineTo(x + len, y);
+  ctx.moveTo(x + w - len, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + len);
+  ctx.moveTo(x + w, y + h - len); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - len, y + h);
+  ctx.moveTo(x + len, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - len);
+}
+
 function draw() {
   const w = stage.clientWidth;
   const h = stage.clientHeight;
   ctx.clearRect(0, 0, w, h);
 
+  // 越界：整屏信号色细框 + 四角加粗
   if (running && violating) {
-    ctx.strokeStyle = 'rgba(255,59,48,.9)';
-    ctx.lineWidth = 6;
-    ctx.strokeRect(3, 3, w - 6, h - 6);
+    ctx.strokeStyle = 'rgba(255,75,31,.5)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(1, 1, w - 2, h - 2);
+    ctx.strokeStyle = '#FF4B1F';
+    ctx.lineWidth = 4;
+    cornerPath(8, 8, w - 16, h - 16, 34);
+    ctx.stroke();
   }
 
-  // 判定框（姿势模式没有框）
+  // 判定框（姿势模式没有框）：细线 + 四角括号
   const showBox = S.frameMode !== 'pose';
   const a = toPx(roi.l, roi.t);
   const b = toPx(roi.r, roi.b);
@@ -687,13 +793,19 @@ function draw() {
   const rw = Math.abs(b.x - a.x);
   const rh = Math.abs(b.y - a.y);
   if (showBox) {
-    ctx.fillStyle = violating ? 'rgba(255,59,48,.10)' : 'rgba(52,199,89,.08)';
+    ctx.fillStyle = violating ? 'rgba(255,75,31,.08)' : 'rgba(111,227,164,.05)';
     ctx.fillRect(x, y, rw, rh);
-    ctx.setLineDash(selecting ? [10, 8] : []);
-    ctx.strokeStyle = violating ? '#ff3b30' : '#34c759';
-    ctx.lineWidth = 3;
+
+    ctx.strokeStyle = violating ? 'rgba(255,75,31,.55)' : 'rgba(233,230,222,.35)';
+    ctx.lineWidth = 1;
+    if (selecting) ctx.setLineDash([8, 7]);
     ctx.strokeRect(x, y, rw, rh);
     ctx.setLineDash([]);
+
+    ctx.strokeStyle = violating ? '#FF4B1F' : '#6FE3A4';
+    ctx.lineWidth = 3;
+    cornerPath(x, y, rw, rh, Math.min(22, Math.min(rw, rh) * 0.28));
+    ctx.stroke();
   }
 
   // 骨架：框模式按是否在框内变色，姿势模式按是否越界变色
@@ -708,13 +820,13 @@ function draw() {
       return { pt: toPx(d.x, d.y), inside };
     });
 
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 2.5;
     ctx.lineCap = 'round';
     for (const [i, j] of CONNECTIONS) {
       const p1 = px[i];
       const p2 = px[j];
       if (!p1 || !p2) continue;
-      ctx.strokeStyle = p1.inside && p2.inside ? '#34c759' : '#ff3b30';
+      ctx.strokeStyle = p1.inside && p2.inside ? '#6FE3A4' : '#FF4B1F';
       ctx.beginPath();
       ctx.moveTo(p1.pt.x, p1.pt.y);
       ctx.lineTo(p2.pt.x, p2.pt.y);
@@ -723,9 +835,9 @@ function draw() {
 
     for (const p of px) {
       if (!p) continue;
-      ctx.fillStyle = p.inside ? '#34c759' : '#ff3b30';
+      ctx.fillStyle = p.inside ? '#6FE3A4' : '#FF4B1F';
       ctx.beginPath();
-      ctx.arc(p.pt.x, p.pt.y, 4.5, 0, Math.PI * 2);
+      ctx.arc(p.pt.x, p.pt.y, 4, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -735,10 +847,14 @@ function draw() {
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 84px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
-    ctx.fillText(String(Math.ceil(prepareRemaining / 1000)), w / 2, h / 2);
-    ctx.font = '14px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
+    ctx.shadowColor = 'rgba(0,0,0,.85)';
+    ctx.shadowBlur = 24;
+    ctx.fillStyle = '#F2B33D';
+    ctx.font = '600 96px ui-monospace, "SF Mono", Consolas, monospace';
+    ctx.fillText(String(Math.ceil(prepareRemaining / 1000)), w / 2, h / 2 - 6);
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = 'rgba(233,230,222,.75)';
+    ctx.font = '600 11px ui-monospace, Consolas, monospace';
     ctx.fillText(S.frameMode === 'pose' ? '摆好姿势' : '准备', w / 2, h / 2 + 62);
     ctx.restore();
   }
@@ -855,6 +971,7 @@ function stopOutput() {
   prepareEndsAt = 0;
   prepareRemaining = 0;
   referencePose = null;
+  stage.classList.toggle('live', false);
   cancelTest();
   release();
   $('btnRun').textContent = '开始';
@@ -876,7 +993,7 @@ setInterval(() => {
     violating = false;
     $('meter').innerHTML = `倒计时 <b>${Math.ceil(prepareRemaining / 1000)}</b>s`;
     $('phase').textContent = '准备中';
-    $('phase').style.color = '#34c759';
+    $('phase').style.color = '#F2B33D';
     return;
   }
   prepareRemaining = 0;
@@ -931,7 +1048,7 @@ setInterval(() => {
     $('meter').innerHTML = `越界 <b>${(outsideMs / 1000).toFixed(1)}</b>s · 目标强度 <b>${target}</b>`;
   }
   $('phase').textContent = violating ? '越界中' : (fresh ? '监守中' : '没检测到人');
-  $('phase').style.color = violating ? '#ff3b30' : (fresh ? '#34c759' : '#9e9e9e');
+  $('phase').style.color = violating ? '#FF4B1F' : (fresh ? '#6FE3A4' : '#8B9099');
 }, 60);
 
 // ============================================================ 顶部状态
@@ -997,6 +1114,7 @@ $('btnRun').onclick = () => {
     cancelTest();
     release();
     running = true;
+    stage.classList.toggle('live', true);
     outsideMs = 0;
     lastShockAt = 0;
     wasViolating = false;
