@@ -9,10 +9,11 @@ enum class PointSet(val label: String) {
     FEET("双脚"),
 }
 
-/** 判定框来源：手动框选，或者每 N 秒随机跳一次。 */
+/** 判定方式：手动框选、每 N 秒随机跳框，或者锁死开局那一刻的姿势。 */
 enum class FrameMode(val label: String) {
     MANUAL("固定框"),
     RANDOM("随机框"),
+    POSE("姿势锁定"),
 }
 
 /** 归一化坐标矩形，(0,0) 是左上角，(1,1) 是右下角，坐标系为「已转正」的相机画面。 */
@@ -46,6 +47,10 @@ data class CageSettings(
     val pointSet: PointSet = PointSet.TORSO,
     val frameMode: FrameMode = FrameMode.MANUAL,
     val randomEverySec: Int = 15,
+    /** 开局准备倒计时，0 = 关闭。 */
+    val prepareSec: Int = 3,
+    /** 姿势锁定模式的容差，单位是画面高度的百分比。 */
+    val poseTolerance: Int = 3,
     val channel: Int = 0,
     val waveform: String = CageSettings.PRESET_TAP,
     val relayUrl: String = CageSettings.DEFAULT_RELAY,
@@ -119,6 +124,8 @@ class SettingsStore(context: Context) {
             FrameMode.valueOf(prefs.getString(KEY_FRAME_MODE, null) ?: FrameMode.MANUAL.name)
         }.getOrDefault(FrameMode.MANUAL),
         randomEverySec = prefs.getInt(KEY_RANDOM_EVERY, 15),
+        prepareSec = prefs.getInt(KEY_PREPARE_SEC, 3),
+        poseTolerance = prefs.getInt(KEY_POSE_TOLERANCE, 3),
         channel = prefs.getInt(KEY_CHANNEL, 0),
         waveform = prefs.getString(KEY_WAVEFORM, null) ?: CageSettings.PRESET_TAP,
         relayUrl = prefs.getString(KEY_RELAY, null) ?: CageSettings.DEFAULT_RELAY,
@@ -138,6 +145,8 @@ class SettingsStore(context: Context) {
             .putString(KEY_POINT_SET, s.pointSet.name)
             .putString(KEY_FRAME_MODE, s.frameMode.name)
             .putInt(KEY_RANDOM_EVERY, s.randomEverySec)
+            .putInt(KEY_PREPARE_SEC, s.prepareSec)
+            .putInt(KEY_POSE_TOLERANCE, s.poseTolerance)
             .putInt(KEY_CHANNEL, s.channel)
             .putString(KEY_WAVEFORM, s.waveform)
             .putString(KEY_RELAY, s.relayUrl)
@@ -173,6 +182,8 @@ class SettingsStore(context: Context) {
         const val KEY_POINT_SET = "point_set"
         const val KEY_FRAME_MODE = "frame_mode"
         const val KEY_RANDOM_EVERY = "random_every"
+        const val KEY_PREPARE_SEC = "prepare_sec"
+        const val KEY_POSE_TOLERANCE = "pose_tolerance"
         const val KEY_CHANNEL = "channel"
         const val KEY_WAVEFORM = "waveform"
         const val KEY_RELAY = "relay"

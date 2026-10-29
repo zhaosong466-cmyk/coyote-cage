@@ -16,7 +16,7 @@ import org.junit.Test
 class CageEngineTest {
     private class Fixture(val scope: TestScope) {
         val client = DglabV4Client().apply { connectDebug() }
-        var config = CageSettings(graceMs = 0)
+        var config = CageSettings(graceMs = 0, prepareSec = 0)
         val engine = CageEngine(client, { config }, { NormRect.DEFAULT },
             StandardTestDispatcher(scope.testScheduler), { 10000 + scope.testScheduler.currentTime })
         fun pose(x: Float) = engine.onPose(PoseFrame(
@@ -25,6 +25,49 @@ class CageEngineTest {
         fun log() = client.debugLog.value.map { it.text }
         fun pulses() = log().count { it.startsWith("波形 ") }
         fun stop() { engine.emergency(); scope.runCurrent() }
+    }
+
+    @Test fun prepareCountdownBlocksJudgingUntilItEnds() = runTest {
+        val f = Fixture(this)
+        f.config = f.config.copy(prepareSec = 3)
+        f.engine.start()
+        runCurrent()
+        assertTrue(f.engine.ui.value.preparing)
+
+        // 倒计时期间持续喂姿态（真实相机也是每帧一喂），步长小于 900ms 的过期窗口
+        repeat(4) {
+            f.pose(0.95f)
+            advanceTimeBy(700)
+            runCurrent()
+        }
+        assertEquals(0, f.pulses())
+        assertTrue(f.engine.ui.value.preparing)
+
+        f.pose(0.95f)
+        advanceTimeBy(700)
+        runCurrent()
+        assertFalse(f.engine.ui.value.preparing)
+        assertEquals(1, f.pulses())
+        f.stop()
+    }
+
+    @Test fun poseModeLocksReferenceAndPunishesMovement() = runTest {
+        val f = Fixture(this)
+        f.config = f.config.copy(frameMode = FrameMode.POSE, poseTolerance = 3)
+        f.pose(0.5f)
+        f.engine.start(); runCurrent()
+        assertTrue(f.engine.ui.value.poseLocked)
+        assertEquals(0, f.pulses())
+
+        // 横向 2% ≈ 12.8px / 480 ≈ 2.7%，在 3% 容差内
+        f.pose(0.52f); advanceTimeBy(60); runCurrent()
+        assertEquals(0, f.pulses())
+
+        // 横向 12% ≈ 76.8px / 480 ≈ 16%，超容差
+        f.pose(0.62f); advanceTimeBy(60); runCurrent()
+        assertEquals(1, f.pulses())
+        assertTrue(f.engine.ui.value.violating)
+        f.stop()
     }
 
     @Test fun zeroGraceRequiresFreshOutsidePose() = runTest {

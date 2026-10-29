@@ -59,6 +59,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -91,6 +92,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.coroutines.resume
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.random.Random
@@ -190,15 +192,21 @@ fun CageApp() {
     }
 
     val randomMode = settings.frameMode == FrameMode.RANDOM
-    // 进入随机框模式时，退出手动框选状态
-    LaunchedEffect(randomMode) {
-        if (randomMode) selecting = false
+    val poseMode = settings.frameMode == FrameMode.POSE
+    val prepareSeconds = if (engineUi.preparing) {
+        ceil(engineUi.prepareRemainingMs / 1000.0).toInt().coerceAtLeast(1)
+    } else {
+        0
+    }
+    // 进入随机框 / 姿势锁定模式时，退出手动框选状态
+    LaunchedEffect(randomMode, poseMode) {
+        if (randomMode || poseMode) selecting = false
     }
     val onConnect: () -> Unit = {
         if (settings.debugMode) dglab.connectDebug() else dglab.connect(settings.relayUrl)
     }
     val onToggleRun: () -> Unit = { if (engineUi.running) engine.stop() else engine.start() }
-    val onToggleSelect: () -> Unit = { if (!randomMode) selecting = !selecting }
+    val onToggleSelect: () -> Unit = { if (!randomMode && !poseMode) selecting = !selecting }
     val onSwitchCamera: () -> Unit = {
         lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
             CameraSelector.LENS_FACING_FRONT
@@ -231,9 +239,11 @@ fun CageApp() {
                         if (!randomMode) store.saveRoi(newRoi)
                     },
                     pointsFlow = poseFlow,
-                    selecting = selecting && !randomMode,
+                    selecting = selecting && !randomMode && !poseMode,
                     violating = engineUi.violating,
-                    poseWarning = !engineUi.poseFresh && engineUi.running,
+                    poseWarning = !engineUi.poseFresh && engineUi.running && !engineUi.preparing,
+                    poseMode = poseMode,
+                    prepareSeconds = prepareSeconds,
                 )
                 SidePanel(
                     modifier = Modifier.width(300.dp).fillMaxHeight(),
@@ -242,6 +252,8 @@ fun CageApp() {
                     ready = link.phase == LinkPhase.PAIRED,
                     selecting = selecting,
                     randomMode = randomMode,
+                    poseMode = poseMode,
+                    poseTolerance = settings.poseTolerance,
                     randomRemaining = randomRemaining,
                     debugMode = settings.debugMode,
                     debugLog = debugLog,
@@ -276,9 +288,11 @@ fun CageApp() {
                         if (!randomMode) store.saveRoi(newRoi)
                     },
                     pointsFlow = poseFlow,
-                    selecting = selecting && !randomMode,
+                    selecting = selecting && !randomMode && !poseMode,
                     violating = engineUi.violating,
-                    poseWarning = !engineUi.poseFresh && engineUi.running,
+                    poseWarning = !engineUi.poseFresh && engineUi.running && !engineUi.preparing,
+                    poseMode = poseMode,
+                    prepareSeconds = prepareSeconds,
                 )
                 if (settings.debugMode) {
                     DebugPanel(entries = debugLog)
@@ -288,6 +302,8 @@ fun CageApp() {
                     ready = link.phase == LinkPhase.PAIRED,
                     selecting = selecting,
                     randomMode = randomMode,
+                    poseMode = poseMode,
+                    poseTolerance = settings.poseTolerance,
                     randomRemaining = randomRemaining,
                     onToggleRun = onToggleRun,
                     onToggleSelect = onToggleSelect,
@@ -334,6 +350,8 @@ private fun CameraStage(
     selecting: Boolean,
     violating: Boolean,
     poseWarning: Boolean,
+    poseMode: Boolean,
+    prepareSeconds: Int,
 ) {
     Box(modifier) {
         if (granted) {
@@ -357,7 +375,26 @@ private fun CameraStage(
             pointsFlow = pointsFlow,
             selecting = selecting,
             violating = violating,
+            showFrameBox = !poseMode,
         )
+
+        if (prepareSeconds > 0) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = prepareSeconds.toString(),
+                        color = Color.White,
+                        fontSize = 84.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = if (poseMode) "摆好姿势" else "准备",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                    )
+                }
+            }
+        }
 
         if (selecting) {
             Text(
@@ -450,6 +487,8 @@ private fun ControlBar(
     ready: Boolean,
     selecting: Boolean,
     randomMode: Boolean,
+    poseMode: Boolean,
+    poseTolerance: Int,
     randomRemaining: Int,
     onToggleRun: () -> Unit,
     onToggleSelect: () -> Unit,
@@ -465,12 +504,9 @@ private fun ControlBar(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = when {
-                    ui.violating -> "越界中"
-                    ui.running -> "监守中"
-                    else -> "未开始"
-                },
+                text = statusLabel(ui),
                 color = when {
+                    ui.preparing -> COLOR_OK
                     ui.violating -> COLOR_ALERT
                     ui.running -> COLOR_OK
                     else -> COLOR_DIM
@@ -479,17 +515,7 @@ private fun ControlBar(
             )
             Spacer(Modifier.width(10.dp))
             Text(
-                text = buildString {
-                    append("越界 ")
-                    append(formatSeconds(ui.outsideMs))
-                    append("s · 强度 ")
-                    append(ui.targetIntensity)
-                    if (randomMode && ui.running) {
-                        append(" · 下一个框 ")
-                        append(randomRemaining)
-                        append("s")
-                    }
-                },
+                text = meterLabel(ui, randomMode, poseMode, poseTolerance, randomRemaining),
                 color = COLOR_DIM,
                 fontSize = 12.sp,
             )
@@ -507,7 +533,7 @@ private fun ControlBar(
             }
             OutlinedButton(
                 onClick = onToggleSelect,
-                enabled = !randomMode,
+                enabled = !randomMode && !poseMode,
                 modifier = Modifier.weight(1f),
             ) {
                 Text(if (selecting) "完成" else "框选")
@@ -538,6 +564,8 @@ private fun SidePanel(
     ready: Boolean,
     selecting: Boolean,
     randomMode: Boolean,
+    poseMode: Boolean,
+    poseTolerance: Int,
     randomRemaining: Int,
     debugMode: Boolean,
     debugLog: List<DebugEntry>,
@@ -573,12 +601,9 @@ private fun SidePanel(
         Spacer(Modifier.height(2.dp))
 
         Text(
-            text = when {
-                ui.violating -> "越界中"
-                ui.running -> "监守中"
-                else -> "未开始"
-            },
+            text = statusLabel(ui),
             color = when {
+                ui.preparing -> COLOR_OK
                 ui.violating -> COLOR_ALERT
                 ui.running -> COLOR_OK
                 else -> COLOR_DIM
@@ -586,13 +611,10 @@ private fun SidePanel(
             fontSize = 13.sp,
         )
         Text(
-            text = "越界 " + formatSeconds(ui.outsideMs) + "s · 强度 " + ui.targetIntensity,
+            text = meterLabel(ui, randomMode, poseMode, poseTolerance, randomRemaining),
             color = COLOR_DIM,
             fontSize = 11.sp,
         )
-        if (randomMode && ui.running) {
-            Text("下一个框 ${randomRemaining}s", color = COLOR_OK, fontSize = 11.sp)
-        }
 
         if (debugMode) {
             Column(
@@ -688,6 +710,50 @@ private fun randomRect(previous: Int, random: Random): RandomBox {
 private const val TOP_QUADRANT_CHANCE = 0.10f
 
 private fun formatSeconds(ms: Long): String = String.format("%.1f", ms / 1000f)
+
+private fun statusLabel(ui: EngineUi): String = when {
+    ui.preparing -> "准备中"
+    ui.violating -> "越界中"
+    ui.running -> "监守中"
+    else -> "未开始"
+}
+
+private fun meterLabel(
+    ui: EngineUi,
+    randomMode: Boolean,
+    poseMode: Boolean,
+    poseTolerance: Int,
+    randomRemaining: Int,
+): String = buildString {
+    when {
+        ui.preparing -> {
+            append("倒计时 ")
+            append(ceil(ui.prepareRemainingMs / 1000.0).toInt().coerceAtLeast(1))
+            append("s")
+        }
+
+        poseMode -> {
+            append("偏差 ")
+            append(String.format("%.1f", ui.deviationPercent))
+            append("% / 容差 ")
+            append(poseTolerance)
+            append("% · 强度 ")
+            append(ui.targetIntensity)
+        }
+
+        else -> {
+            append("越界 ")
+            append(formatSeconds(ui.outsideMs))
+            append("s · 强度 ")
+            append(ui.targetIntensity)
+            if (randomMode && ui.running) {
+                append(" · 下一个框 ")
+                append(randomRemaining)
+                append("s")
+            }
+        }
+    }
+}
 
 // --------------------------------------------------------------------- 调试面板
 
@@ -824,6 +890,7 @@ private fun RoiOverlay(
     pointsFlow: StateFlow<PoseFrame?>,
     selecting: Boolean,
     violating: Boolean,
+    showFrameBox: Boolean = true,
 ) {
     // 关键点每帧都在变，单独在这里订阅，避免整棵树跟着重组。
     val frame by pointsFlow.collectAsState()
@@ -895,31 +962,33 @@ private fun RoiOverlay(
             val topLeft = Offset(boxLeft, boxTop)
             val boxColor = if (violating) COLOR_ALERT else COLOR_OK
 
-            drawRect(
-                color = boxColor.copy(alpha = 0.10f),
-                topLeft = topLeft,
-                size = Size(boxWidth, boxHeight),
-            )
-            drawRect(
-                color = boxColor,
-                topLeft = topLeft,
-                size = Size(boxWidth, boxHeight),
-                style = Stroke(
-                    width = 4f,
-                    pathEffect = if (selecting) {
-                        PathEffect.dashPathEffect(floatArrayOf(24f, 16f))
-                    } else {
-                        null
-                    },
-                ),
-            )
+            if (showFrameBox) {
+                drawRect(
+                    color = boxColor.copy(alpha = 0.10f),
+                    topLeft = topLeft,
+                    size = Size(boxWidth, boxHeight),
+                )
+                drawRect(
+                    color = boxColor,
+                    topLeft = topLeft,
+                    size = Size(boxWidth, boxHeight),
+                    style = Stroke(
+                        width = 4f,
+                        pathEffect = if (selecting) {
+                            PathEffect.dashPathEffect(floatArrayOf(24f, 16f))
+                        } else {
+                            null
+                        },
+                    ),
+                )
+            }
 
             // 先算一遍屏幕坐标，骨架和关节点共用
             val screenPoints: List<Offset?> = points.map { point ->
                 if (point.visibility < 0.4f) null else overlayMap.toView(point.x, point.y)
             }
 
-            // 骨架连线：两端都在框内是绿色，只要有一端出框就变红
+            // 骨架连线：框模式下按是否在框内变色，姿势模式下按是否越界变色
             for (connection in PoseSkeleton.CONNECTIONS) {
                 val fromIndex = connection[0]
                 val toIndex = connection[1]
@@ -927,10 +996,13 @@ private fun RoiOverlay(
                 val toPoint = points.getOrNull(toIndex) ?: continue
                 val from = screenPoints.getOrNull(fromIndex) ?: continue
                 val to = screenPoints.getOrNull(toIndex) ?: continue
-                val bothInside = roi.contains(fromPoint.x, fromPoint.y) &&
-                    roi.contains(toPoint.x, toPoint.y)
+                val ok = if (showFrameBox) {
+                    roi.contains(fromPoint.x, fromPoint.y) && roi.contains(toPoint.x, toPoint.y)
+                } else {
+                    !violating
+                }
                 drawLine(
-                    color = if (bothInside) COLOR_OK else COLOR_ALERT,
+                    color = if (ok) COLOR_OK else COLOR_ALERT,
                     start = from,
                     end = to,
                     strokeWidth = 3f,
@@ -941,9 +1013,9 @@ private fun RoiOverlay(
             for (index in points.indices) {
                 val center = screenPoints[index] ?: continue
                 val point = points[index]
-                val inside = roi.contains(point.x, point.y)
+                val ok = if (showFrameBox) roi.contains(point.x, point.y) else !violating
                 drawCircle(
-                    color = if (inside) COLOR_OK else COLOR_ALERT,
+                    color = if (ok) COLOR_OK else COLOR_ALERT,
                     radius = 5.5f,
                     center = center,
                 )

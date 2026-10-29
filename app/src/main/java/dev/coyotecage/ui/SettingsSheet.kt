@@ -130,12 +130,32 @@ fun SettingsSheet(
                 display = { it.label },
                 onSelect = { onChange(settings.copy(frameMode = it)) },
             )
+            SliderRow("开局准备倒计时 (秒)", settings.prepareSec, 0..10) {
+                onChange(settings.copy(prepareSec = it))
+            }
+            if (settings.prepareSec == 0) {
+                Text(
+                    "0 = 关闭倒计时，按「开始」后立即判定。",
+                    color = COLOR_DIM,
+                    fontSize = 11.sp,
+                )
+            }
             if (settings.frameMode == FrameMode.RANDOM) {
                 SliderRow("随机间隔 (秒)", settings.randomEverySec, 5..60) {
                     onChange(settings.copy(randomEverySec = it))
                 }
                 Text(
                     "每 N 秒换一个框，新框不会落在上一个框所在的象限；上半屏概率约 10%；不在框里立刻惩罚，没有容忍时间。",
+                    color = COLOR_DIM,
+                    fontSize = 11.sp,
+                )
+            }
+            if (settings.frameMode == FrameMode.POSE) {
+                SliderRow("姿势容差 (% 画面高度)", settings.poseTolerance, 1..12) {
+                    onChange(settings.copy(poseTolerance = it))
+                }
+                Text(
+                    "倒计时归零时记录当前姿势当基准，之后偏差超过容差就立刻惩罚。太小会误触，太大等于没锁。",
                     color = COLOR_DIM,
                     fontSize = 11.sp,
                 )
