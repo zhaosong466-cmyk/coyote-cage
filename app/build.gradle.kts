@@ -15,8 +15,8 @@ android {
         applicationId = "dev.coyotecage"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
 
         // 只保留 arm64，APK 体积能小一半左右。需要 32 位机器就把下面这行删掉。
         ndk { abiFilters.add("arm64-v8a") }

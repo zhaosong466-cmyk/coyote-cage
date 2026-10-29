@@ -201,3 +201,20 @@ python -m http.server 8765 --bind 127.0.0.1 --directory coyote-cage/web
 
 协议部分依据：<https://github.com/DG-LAB-OPENSOURCE/DG-LAB-OPENSOURCE>（蓝牙协议）
 与官方 `dglab-kit` 的 V4 Socket 文档。
+
+## 12. 关于
+
+本项目是 **DSH（DeepSeek Harness）与 Codex 的 vibe coding 协作产物**：
+需求拆解、代码评审和排错都在对话里完成，代码由 AI 生成，人只负责提需求、验收和拍板。
+真机验证、协议取舍和最终判断由人完成。
+
+### 版本历史
+
+| 版本 | 说明 |
+|---|---|
+| **v1.1.0** | 安全修复：零容忍下网页版误触发、急停归零延迟、停止后残留输出；补 8 项网页回归测试 + 7 项 Android 单元测试 |
+| v1.0.0 | 首个公开版本：固定框 / 随机框、横屏布局、调试模式、网页版 |
+
+两个版本的 APK 都放在对应的 Release 里。**旧版本一直保留**：
+[v1.0.0 Release](https://github.com/zhaosong466-cmyk/coyote-cage/releases/tag/v1.0.0)。
+仓库本身只放源码，APK 不进 git 历史（31 MB 的二进制会把仓库撑爆）。
