@@ -1,9 +1,9 @@
-# 画地为牢 · Coyote Cage
+# 画地为牢
 
-用手机摄像头画一个框，人站进去；身体任何一个判定点出框，就通过 DG-LAB 4 APP 给一发电击。
+用手机摄像头圈一块区域，人站在里面。身体判定点离开区域时，按设定的节奏向已配对的外设下发输出。
 强度、间隔、时长、递增节奏、波形全部可调。
 
-Android / Kotlin / Jetpack Compose / CameraX / MediaPipe Pose / DG-LAB V4 Socket。
+Android（Kotlin + CameraX + MediaPipe Pose）/ Web（单文件）/ 外设联动走 DG-LAB V4 Socket。
 
 ---
 
@@ -17,7 +17,7 @@ Android / Kotlin / Jetpack Compose / CameraX / MediaPipe Pose / DG-LAB V4 Socket
                                                 │ 归一化坐标
                                       ┌─────────▼──────────┐
                                       │ 判定：点是否在框内   │
-                                      │ 越界累计 → 惩罚循环  │
+                                      │ 越界累计 → 输出循环  │
                                       └─────────┬──────────┘
                                                 │ device.op
                                       ┌─────────▼──────────┐
@@ -25,12 +25,12 @@ Android / Kotlin / Jetpack Compose / CameraX / MediaPipe Pose / DG-LAB V4 Socket
                                       └─────────┬──────────┘
                                                 │ wss://trex.dungeon-lab.cn/v4
                                       ┌─────────▼──────────┐
-                                      │  DG-LAB 4 APP      │ ──蓝牙──> 郊狼主机
+                                      │    外设 App        │ ──蓝牙──> 外设
                                       └────────────────────┘
 ```
 
-本机是 **V4 协议里的「控制方」**：连上官方中继拿到 `targetId`，生成二维码；
-DG-LAB APP 扫码后成为「被控方」接进来；之后所有强度/波形指令都走 `device.op` RPC。
+本机是 **V4 协议里的「控制方」**：连上中继拿到 `targetId`，生成二维码；
+外设 App 扫码后成为「被控方」接进来；之后所有强度/波形指令都走 `device.op` RPC。
 
 ## 2. 为什么选这个模型
 
@@ -68,16 +68,17 @@ gradle assembleDebug        # 产物在 app/build/outputs/apk/debug/
 
 1. 手机架好（建议横放或三脚架，能拍到全身），打开 App，允许相机权限。
 2. 点右上角 **连接**，等状态变成「等待 DG-LAB APP 扫码」。
-3. 另一台手机（连着郊狼的那台）打开 **DG-LAB 4 APP** → 设置 → **Socket 控制** → 扫本机弹出的二维码。
-   连接成功后状态变成「已连接 · 郊狼…」并显示电量。
+3. 另一台手机（跑外设 App 的那台）打开对应 App → 设置 → **Socket 控制** → 扫本机弹出的二维码。
+   连接成功后状态变成「已连接 · 设备…」并显示电量。
 4. 点 **框选**，在画面里拖出一个矩形（脚下那块地板），再点 **完成**。
+   也可以在设置里切到 **随机框**，每 N 秒自动换一个位置。
 5. 先去 **设置** 里把「基础强度」调到 3–5，点「用当前基础强度试一次」确认体感。
-6. 点 **开始**。人走出框 → 越界计时 → 超过容忍时间开始电击；回到框内立刻停并归零。
+6. 点 **开始**。人走出框 → 越界计时 → 超过容忍时间开始输出；回到框内立刻停并归零。
 7. 任何时候点红色 **急停**：清空波形队列 + 两个通道强度归零。
 
 > **一台手机也能试**：点「复制二维码内容」，把那条 `https://dungeon-lab.cn/s/...` 链接丢进浏览器打开，
-> 会直接拉起 DG-LAB APP。但本 App 在前台占着相机，DG-LAB APP 退到后台后蓝牙/WebSocket 可能被系统掐掉，
-> 真玩还是建议两台手机：一台当摄像头+控制端，一台只跑 DG-LAB APP。
+> 会直接拉起外设 App。但本 App 在前台占着相机，外设 App 退到后台后蓝牙/WebSocket 可能被系统掐掉，
+> 稳一点还是用两台手机：一台当摄像头 + 控制端，一台只跑外设 App。
 
 ## 5. 参数
 
@@ -88,11 +89,12 @@ gradle assembleDebug        # 产物在 app/build/outputs/apk/debug/
 | 每级递增 | 每次涨多少 |
 | 随越界时间递增 | 开关；打开后每 N 秒涨一级，回到框内立即重置 |
 | 每 N 秒涨一级 | 递增节奏（1–30 秒） |
-| 单次电击时长 | 一次输出多长（100–3000ms） |
+| 单次输出时长 | 一次输出多长（100–3000ms） |
 | 两次间隔 | 两次输出之间的静默时间（200–10000ms） |
-| 越界容忍 | 出框多久才算越界，防抖用（0–1500ms） |
+| 越界容忍 | 出框多久才算越界，防抖用（0–1500ms）；随机框模式固定为 0 |
 | 检测部位 | 躯干（双肩+双髋）/ 全身 / 双脚 |
 | 输出通道 | A 或 B |
+| 框模式 | 固定框（手画）/ 随机框（每 N 秒跳一次，上半屏概率约 10%） |
 | 中继地址 | 默认官方 `wss://trex.dungeon-lab.cn/v4`，可换成自建服务端 |
 
 ## 6. 波形格式
@@ -105,18 +107,23 @@ gradle assembleDebug        # 产物在 app/build/outputs/apk/debug/
 ```
 
 例：`0A0A0A0A64646464` = 四段 10Hz / 满强度；`0A0A0A0A32323232` = 四段 10Hz / 50% 强度。
-电击时长会自动把模板循环铺满（例如 600ms = 6 帧）。
+输出时长会自动把模板循环铺满（例如 600ms = 6 帧）。
 
 任何一帧里出现越界数值（如强度 >100），该通道这一帧的四组数据会被整帧丢弃——
 这也是「只让一个通道输出」的技巧。
 
 ## 7. 安全
 
-- 这是带电设备。**不要**把电极放在胸口、颈部、头部；不要让电流跨过心脏。
-- 心脏病、起搏器/金属植入物、癫痫、孕妇、皮肤病患者禁用。
-- 同一部位连续使用不超过 30 分钟。
-- 移动电极、更换贴片前先停输出。
-- 本项目只是遥控器，输出安全的最终责任在人和设备本身；先从小强度试。
+本项目只负责「判定 + 下发指令」，实际输出由所连接的外设决定，
+**具体禁忌部位、禁忌人群与使用时长限制，请严格以设备自身的说明书和安全须知为准**。
+
+几条通用原则：
+
+- 第一次使用从最小强度开始，确认体感后再调高。
+- 身体不适、饮酒后、独自无人照看时不要使用。
+- 始终保留物理急停手段：App 内的急停按钮 + 设备本身的开关。
+- 不要在驾驶、操作机械等需要保持注意力的场景使用。
+- 切换电极/贴片位置前，先停止输出。
 
 ## 8. 代码结构
 
@@ -124,7 +131,7 @@ gradle assembleDebug        # 产物在 app/build/outputs/apk/debug/
 app/src/main/java/dev/coyotecage/
 ├── MainActivity.kt          入口，常亮屏
 ├── Settings.kt              CageSettings / 波形解析 / SharedPreferences
-├── CageEngine.kt            判定循环 + 惩罚节奏 + 递增
+├── CageEngine.kt            判定循环 + 输出节奏 + 递增
 ├── camera/CameraAnalyzer.kt CameraX ImageProxy → Bitmap → 推理
 ├── pose/PoseEngine.kt       MediaPipe Pose Landmarker 封装（GPU→CPU 回落）
 ├── pose/PoseSkeleton.kt     33 点骨架连线表（连线可视化用）
@@ -148,7 +155,7 @@ web/index.html               网页版（单文件，MediaPipe Tasks JS）
 ## 10. 网页版（免安装）
 
 `web/index.html` 是同一套逻辑的浏览器实现：MediaPipe Tasks JS + getUserMedia + 同一个 V4 Socket 客户端。
-骨架连线、框选判定、惩罚节奏、波形配置都和安卓版一致，参数存 localStorage。
+骨架连线、框选判定、输出节奏、波形配置都和安卓版一致，参数存 localStorage。
 
 必须通过 `http://localhost` 或 `https://` 打开，否则浏览器禁用摄像头：
 
@@ -161,7 +168,7 @@ python -m http.server 8765 --bind 127.0.0.1 --directory coyote-cage/web
   "Insecure origins treated as secure" 把地址加进白名单。
 - 首次打开要从 jsdelivr 拉 wasm（约 9MB）、从 googleapis 拉模型（5.7MB），之后走缓存。
 - CDN 不通时，把模型下到 `web/models/pose_landmarker_lite.task`，页面会自动回退到本地这份。
-- 二维码库加载失败时会退化成「复制配对链接」，在 DG-LAB 手机上打开那条链接也能直接拉起 APP。
+- 二维码库加载失败时会退化成「复制配对链接」，在跑外设 App 的手机上打开那条链接也能直接拉起 APP。
 - iOS Safari 的 wasm/WebGL 支持一般，建议 Chrome / Edge。
 
 ### 部署到 GitHub Pages（手机上用 https 访问）
