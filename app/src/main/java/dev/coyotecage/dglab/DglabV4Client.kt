@@ -330,7 +330,7 @@ class DglabV4Client {
     suspend fun clear(channel: Int) {
         opLock.withLock {
             val slot = firstSlot() ?: return@withLock
-            rpc("device.op.clear", JSONObject().put("s", slot).put("c", channel))
+            fireRequest("device.op.clear", JSONObject().put("s", slot).put("c", channel))
         }
     }
 
@@ -353,15 +353,18 @@ class DglabV4Client {
     }
 
     suspend fun emergencyStop() {
-        val slot = firstSlot() ?: return
-        runCatching { rpc("device.op.clear", JSONObject().put("s", slot)) }
-        fireDeviceOp(
-            JSONObject().put("s", slot).put("t", 7).put("c", 0).put("p", 1).put("v", 0)
-        )
-        fireDeviceOp(
-            JSONObject().put("s", slot).put("t", 7).put("c", 1).put("p", 1).put("v", 0)
-        )
-        _state.update { it.copy(intensityA = 0, intensityB = 0) }
+        opLock.withLock {
+            val slot = firstSlot() ?: return@withLock
+            // 先归零，再清队列；不等待 RPC 回复，也不让普通输出插入这三条指令之间。
+            fireDeviceOp(
+                JSONObject().put("s", slot).put("t", 7).put("c", 0).put("p", 1).put("v", 0)
+            )
+            fireDeviceOp(
+                JSONObject().put("s", slot).put("t", 7).put("c", 1).put("p", 1).put("v", 0)
+            )
+            fireRequest("device.op.clear", JSONObject().put("s", slot))
+            _state.update { it.copy(intensityA = 0, intensityB = 0) }
+        }
     }
 
     // ---------------------------------------------------------------- 底层发送
@@ -409,16 +412,26 @@ class DglabV4Client {
     }
 
     private fun fireDeviceOp(op: JSONObject) {
+        fireRequest("device.op", op)
+    }
+
+    /** 输出与清队列均按 WebSocket 顺序发送，不等待设备确认。 */
+    private fun fireRequest(method: String, data: JSONObject) {
         if (debugMode) {
-            appendDebug(describe(op))
+            val channel = data.optInt("c", -1)
+            appendDebug(when {
+                method == "device.op" -> describe(data)
+                channel >= 0 -> "清空 " + (if (channel == 0) "A" else "B") + " 通道波形"
+                else -> "RPC $method"
+            })
             return
         }
         val clientId = _state.value.appClientId ?: return
         val payload = JSONObject()
             .put("t", "req")
             .put("reqId", UUID.randomUUID().toString())
-            .put("m", "device.op")
-            .put("data", op)
+            .put("m", method)
+            .put("data", data)
         val envelope = JSONObject()
             .put("type", "message")
             .put("clientId", clientId)

@@ -9,6 +9,8 @@ on:
       - '*.kts'
       - '.github/workflows/build.yml'
   workflow_dispatch:
+  pull_request:
+    branches: [main]
 
 jobs:
   build:
@@ -26,6 +28,11 @@ jobs:
           gradle-version: '8.9'
 
       # 构建时会自动把 pose_landmarker_lite.task 下载到 assets/
+      - name: Run safety regression tests
+        run: |
+          node --test tests/web-safety.test.cjs
+          gradle testDebugUnitTest --no-daemon --stacktrace
+
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon --stacktrace
 

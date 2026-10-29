@@ -486,11 +486,15 @@ class Dglab {
   }
 
   op(data) {
+    this.request('device.op', data);
+  }
+
+  request(method, data) {
     if (!this.appId) return;
     this.post({
       t: 'req',
       reqId: (crypto.randomUUID && crypto.randomUUID()) || String(Math.random()).slice(2),
-      m: 'device.op',
+      m: method,
       data,
     });
   }
@@ -518,10 +522,10 @@ class Dglab {
     this.op({ s: slot, t: 0, c: channel, p: 1, d: durationMs, v: frames });
   }
 
-  async clear(channel) {
+  clear(channel) {
     const slot = this.slot();
     if (!slot) return;
-    await this.rpc('device.op.clear', { s: slot, c: channel });
+    this.request('device.op.clear', { s: slot, c: channel });
   }
 
   zero(channel) {
@@ -532,12 +536,12 @@ class Dglab {
     this.emit();
   }
 
-  async emergency() {
+  emergency() {
     const slot = this.slot();
     if (!slot) return;
-    await this.rpc('device.op.clear', { s: slot });
     this.op({ s: slot, t: 7, c: 0, p: 1, v: 0 });
     this.op({ s: slot, t: 7, c: 1, p: 1, v: 0 });
+    this.clear();
     this.intensity = [0, 0];
     this.emit();
   }
@@ -728,13 +732,35 @@ function isOutside(points) {
 async function fire(target) {
   const frames = buildFrames();
   if (!frames) return;
+  if (outputChannel !== null && outputChannel !== S.channel) release();
+  outputChannel = S.channel;
   dg.setIntensity(target, S.channel);
   dg.pulse(frames, S.shockMs, S.channel);
 }
 
 function release() {
-  dg.clear(S.channel);
-  dg.zero(S.channel);
+  outputChannel = null;
+  dg.emergency();
+}
+
+let outputChannel = null;
+let testTimer = null;
+
+function cancelTest() {
+  if (testTimer !== null) clearTimeout(testTimer);
+  testTimer = null;
+}
+
+function stopOutput() {
+  running = false;
+  outsideMs = 0;
+  violating = false;
+  wasViolating = false;
+  cancelTest();
+  release();
+  $('btnRun').textContent = '开始';
+  $('btnRun').classList.remove('danger');
+  renderStatus();
 }
 
 setInterval(() => {
@@ -745,7 +771,7 @@ setInterval(() => {
   const out = fresh && isOutside(f.points);
 
   outsideMs = out ? outsideMs + 60 : 0;
-  violating = outsideMs >= S.graceMs;
+  violating = out && outsideMs >= S.graceMs;
   const target = targetFor(outsideMs);
 
   if (violating && now - lastShockAt >= S.shockMs + S.gapMs) {
@@ -818,34 +844,22 @@ $('btnSel').onclick = () => {
 
 $('btnRun').onclick = () => {
   if (running) {
-    running = false;
-    outsideMs = 0;
-    violating = false;
-    wasViolating = false;
-    release();
+    stopOutput();
   } else {
     if (dg.phase !== 'paired') return;
+    cancelTest();
+    release();
     running = true;
     outsideMs = 0;
     lastShockAt = 0;
     wasViolating = false;
-    dg.zero(S.channel);
   }
   $('btnRun').textContent = running ? '停止' : '开始';
   $('btnRun').classList.toggle('danger', running);
   renderStatus();
 };
 
-$('btnStop').onclick = async () => {
-  running = false;
-  outsideMs = 0;
-  violating = false;
-  wasViolating = false;
-  $('btnRun').textContent = '开始';
-  $('btnRun').classList.remove('danger');
-  await dg.emergency();
-  renderStatus();
-};
+$('btnStop').onclick = stopOutput;
 
 overlay.addEventListener('pointerdown', (e) => {
   if (!selecting) return;
@@ -957,12 +971,18 @@ function initSettingsUI() {
 $('btnSet').onclick = () => { if (!$('dlgSet').open) $('dlgSet').showModal(); };
 $('btnCloseSet').onclick = () => $('dlgSet').close();
 $('btnTest').onclick = async () => {
+  if (running || testTimer !== null || dg.phase !== 'paired') return;
   const frames = buildFrames();
   if (!frames) return;
   const target = Math.min(S.base, S.max);
+  release();
+  outputChannel = S.channel;
   dg.setIntensity(target, S.channel);
   dg.pulse(frames, S.shockMs, S.channel);
-  setTimeout(() => { dg.clear(S.channel); dg.zero(S.channel); }, S.shockMs + 200);
+  testTimer = setTimeout(() => {
+    testTimer = null;
+    release();
+  }, S.shockMs + 200);
 };
 
 // ============================================================ 二维码

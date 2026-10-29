@@ -119,6 +119,7 @@ fun CageApp() {
     }
     DisposableEffect(Unit) {
         onDispose {
+            engine.emergency()
             poseEngine.close()
             dglab.disconnect()
         }
