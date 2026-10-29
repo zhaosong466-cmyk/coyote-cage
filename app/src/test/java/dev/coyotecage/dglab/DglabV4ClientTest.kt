@@ -29,6 +29,9 @@ class DglabV4ClientTest {
                 if (data.getString("m").startsWith("device.op")) received.add(data)
                 // Deliberately never acknowledge any request, including clear.
             }
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                webSocket.close(code, reason)
+            }
         }))
         server.start()
         val client = DglabV4Client()
