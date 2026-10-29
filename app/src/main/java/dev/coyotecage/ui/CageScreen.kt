@@ -15,6 +15,8 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -48,18 +50,27 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -240,9 +251,11 @@ fun CageApp() {
                     },
                     pointsFlow = poseFlow,
                     selecting = selecting && !randomMode && !poseMode,
-                    violating = engineUi.violating,
-                    poseWarning = !engineUi.poseFresh && engineUi.running && !engineUi.preparing,
+                    ui = engineUi,
+                    randomMode = randomMode,
                     poseMode = poseMode,
+                    poseTolerance = settings.poseTolerance,
+                    randomRemaining = randomRemaining,
                     prepareSeconds = prepareSeconds,
                 )
                 SidePanel(
@@ -289,9 +302,11 @@ fun CageApp() {
                     },
                     pointsFlow = poseFlow,
                     selecting = selecting && !randomMode && !poseMode,
-                    violating = engineUi.violating,
-                    poseWarning = !engineUi.poseFresh && engineUi.running && !engineUi.preparing,
+                    ui = engineUi,
+                    randomMode = randomMode,
                     poseMode = poseMode,
+                    poseTolerance = settings.poseTolerance,
+                    randomRemaining = randomRemaining,
                     prepareSeconds = prepareSeconds,
                 )
                 if (settings.debugMode) {
@@ -348,9 +363,11 @@ private fun CameraStage(
     onRoiChange: (NormRect) -> Unit,
     pointsFlow: StateFlow<PoseFrame?>,
     selecting: Boolean,
-    violating: Boolean,
-    poseWarning: Boolean,
+    ui: EngineUi,
+    randomMode: Boolean,
     poseMode: Boolean,
+    poseTolerance: Int,
+    randomRemaining: Int,
     prepareSeconds: Int,
 ) {
     Box(modifier) {
@@ -362,7 +379,7 @@ private fun CameraStage(
             )
         } else {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("需要相机权限", color = Color.White)
+                Text("需要相机权限", color = BONE)
             }
         }
 
@@ -374,8 +391,54 @@ private fun CameraStage(
             onRoiChange = onRoiChange,
             pointsFlow = pointsFlow,
             selecting = selecting,
-            violating = violating,
+            violating = ui.violating,
             showFrameBox = !poseMode,
+        )
+
+        // 运行指示灯：舞台顶部的琥珀细线
+        if (ui.running) {
+            Box(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(2.dp)
+                    .background(AMBER),
+            )
+        }
+
+        // 左上：状态
+        Column(
+            Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 22.dp, top = 16.dp),
+        ) {
+            Text(
+                text = "STATE",
+                color = BONE.copy(alpha = 0.42f),
+                fontSize = 9.sp,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 2.sp,
+            )
+            Text(
+                text = statusLabel(ui),
+                color = phaseColor(ui),
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.5.sp,
+            )
+        }
+
+        // 左下：遥测
+        Text(
+            text = meterAnnotated(ui, randomMode, poseMode, poseTolerance, randomRemaining),
+            color = DIM,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 22.dp, bottom = 16.dp)
+                .widthIn(max = 300.dp),
         )
 
         if (prepareSeconds > 0) {
@@ -383,14 +446,17 @@ private fun CameraStage(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = prepareSeconds.toString(),
-                        color = Color.White,
-                        fontSize = 84.sp,
+                        color = AMBER,
+                        fontSize = 88.sp,
+                        fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
                         text = if (poseMode) "摆好姿势" else "准备",
-                        color = Color.White,
-                        fontSize = 14.sp,
+                        color = BONE.copy(alpha = 0.75f),
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 2.sp,
                     )
                 }
             }
@@ -399,29 +465,38 @@ private fun CameraStage(
         if (selecting) {
             Text(
                 text = "拖动框出判定区域",
-                color = Color.White,
+                color = BONE,
                 fontSize = 12.sp,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(10.dp)
-                    .background(Color(0x99000000), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                    .padding(top = 14.dp)
+                    .background(Color(0xCC08090B), RoundedCornerShape(2.dp))
+                    .border(1.dp, LINE, RoundedCornerShape(2.dp))
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
             )
         }
 
-        if (poseWarning) {
+        if (!ui.poseFresh && ui.running && !ui.preparing) {
             Text(
                 text = "没检测到人，已暂停判定",
-                color = COLOR_ALERT,
+                color = SIGNAL,
                 fontSize = 12.sp,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(10.dp)
-                    .background(Color(0x99000000), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                    .padding(bottom = 18.dp)
+                    .background(Color(0xCC08090B), RoundedCornerShape(2.dp))
+                    .border(1.dp, LINE, RoundedCornerShape(2.dp))
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
             )
         }
     }
+}
+
+private fun phaseColor(ui: EngineUi): Color = when {
+    ui.preparing -> AMBER
+    ui.violating -> SIGNAL
+    ui.running && ui.poseFresh -> MINT
+    else -> DIM
 }
 
 // --------------------------------------------------------------------- 顶栏
@@ -436,27 +511,52 @@ private fun StatusBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(COLOR_PANEL)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .background(PANEL)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(statusLine(link), color = Color.White, fontSize = 14.sp)
-            Text(
-                text = statusDetail(link),
-                color = COLOR_DIM,
-                fontSize = 11.sp,
-                maxLines = 2,
-            )
-        }
+        Text("画地为牢", color = BONE, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = "ZONE",
+            color = DIM,
+            fontSize = 9.sp,
+            fontFamily = FontFamily.Monospace,
+            letterSpacing = 2.sp,
+            modifier = Modifier
+                .border(1.dp, LINE, RoundedCornerShape(2.dp))
+                .padding(horizontal = 5.dp, vertical = 3.dp),
+        )
+        Spacer(Modifier.weight(1f))
+        Text(
+            text = headerStatus(link),
+            color = DIM,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 170.dp),
+        )
+        Spacer(Modifier.width(10.dp))
         when (link.phase) {
-            LinkPhase.IDLE -> Button(onClick = onConnect) { Text("连接") }
-            LinkPhase.ERROR -> Button(onClick = onConnect) { Text("重连") }
-            LinkPhase.CONNECTING -> Text("连接中…", color = COLOR_DIM, fontSize = 12.sp)
-            LinkPhase.WAITING_APP -> Button(onClick = onShowQr) { Text("二维码") }
-            LinkPhase.PAIRED -> TextButton(onClick = onDisconnect) { Text("断开") }
+            LinkPhase.IDLE -> KeyButton("连接", onConnect, compact = true, style = KeyStyle.Ghost)
+            LinkPhase.ERROR -> KeyButton("重连", onConnect, compact = true, style = KeyStyle.Ghost)
+            LinkPhase.CONNECTING -> Text("连接中…", color = DIM, fontSize = 11.sp)
+            LinkPhase.WAITING_APP -> KeyButton("二维码", onShowQr, compact = true, style = KeyStyle.Ghost)
+            LinkPhase.PAIRED -> KeyButton("断开", onDisconnect, compact = true, style = KeyStyle.Ghost)
         }
     }
+}
+
+private fun headerStatus(link: LinkState): String = when (link.phase) {
+    LinkPhase.IDLE -> "未连接"
+    LinkPhase.CONNECTING -> "连接中"
+    LinkPhase.WAITING_APP -> "待扫码"
+    LinkPhase.PAIRED -> {
+        val dev = link.devices.firstOrNull()?.name ?: "已连接"
+        "$dev · A${link.intensityA}/B${link.intensityB}"
+    }
+    LinkPhase.ERROR -> link.message ?: "连接异常"
 }
 
 private fun statusLine(link: LinkState): String = when (link.phase) {
@@ -479,6 +579,61 @@ private fun statusDetail(link: LinkState): String {
     return parts.joinToString(" · ")
 }
 
+// --------------------------------------------------------------------- 按键
+
+internal enum class KeyStyle { Normal, Primary, Danger, Ghost }
+
+@Composable
+internal fun KeyButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    style: KeyStyle = KeyStyle.Normal,
+    compact: Boolean = false,
+    enabled: Boolean = true,
+) {
+    val shape = RoundedCornerShape(2.dp)
+    val bg = when (style) {
+        KeyStyle.Primary -> BONE
+        KeyStyle.Danger -> SIGNAL
+        KeyStyle.Ghost -> Color.Transparent
+        KeyStyle.Normal -> RAISE
+    }
+    val fg = when (style) {
+        KeyStyle.Primary -> INK
+        KeyStyle.Danger -> Color.White
+        else -> BONE
+    }
+    val borderColor = when (style) {
+        KeyStyle.Primary -> BONE
+        KeyStyle.Danger -> SIGNAL
+        else -> LINE
+    }
+
+    Box(
+        modifier
+            .then(if (compact) Modifier.height(32.dp) else Modifier.height(46.dp))
+            .alpha(if (enabled) 1f else 0.32f)
+            .clip(shape)
+            .background(bg)
+            .border(1.dp, borderColor, shape)
+            .clickable(enabled = enabled) { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = fg,
+            fontSize = if (compact) 12.sp else 13.sp,
+            fontWeight = if (style == KeyStyle.Primary || style == KeyStyle.Danger) {
+                FontWeight.SemiBold
+            } else {
+                FontWeight.Medium
+            },
+            modifier = Modifier.padding(horizontal = if (compact) 10.dp else 12.dp),
+        )
+    }
+}
+
 // --------------------------------------------------------------------- 控制条
 
 @Composable
@@ -499,57 +654,34 @@ private fun ControlBar(
     Column(
         Modifier
             .fillMaxWidth()
-            .background(COLOR_PANEL)
-            .padding(12.dp),
+            .background(PANEL)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = statusLabel(ui),
-                color = when {
-                    ui.preparing -> COLOR_OK
-                    ui.violating -> COLOR_ALERT
-                    ui.running -> COLOR_OK
-                    else -> COLOR_DIM
-                },
-                fontSize = 13.sp,
-            )
-            Spacer(Modifier.width(10.dp))
-            Text(
-                text = meterLabel(ui, randomMode, poseMode, poseTolerance, randomRemaining),
-                color = COLOR_DIM,
-                fontSize = 12.sp,
-            )
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            KeyButton(
+                text = if (ui.running) "停止" else "开始",
                 onClick = onToggleRun,
                 enabled = ready || ui.running,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(if (ui.running) "停止" else "开始")
-            }
-            OutlinedButton(
+                style = KeyStyle.Primary,
+                modifier = Modifier.weight(1.4f),
+            )
+            KeyButton(
+                text = if (selecting) "完成" else "框选",
                 onClick = onToggleSelect,
                 enabled = !randomMode && !poseMode,
                 modifier = Modifier.weight(1f),
-            ) {
-                Text(if (selecting) "完成" else "框选")
-            }
-            OutlinedButton(onClick = onSwitchCamera) { Text("镜头") }
-            OutlinedButton(onClick = onSettings) { Text("设置") }
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        Button(
-            onClick = onEmergency,
-            colors = ButtonDefaults.buttonColors(containerColor = COLOR_ALERT),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("急停（清空波形并归零）")
+            )
+            KeyButton("镜头", onSwitchCamera, modifier = Modifier.weight(1f))
+            KeyButton("设置", onSettings, modifier = Modifier.weight(1f))
+            KeyButton(
+                text = "急停",
+                onClick = onEmergency,
+                style = KeyStyle.Danger,
+                modifier = Modifier.width(84.dp),
+            )
         }
     }
 }
@@ -581,53 +713,44 @@ private fun SidePanel(
     val formatter = remember { SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()) }
     Column(
         modifier
-            .background(COLOR_PANEL)
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+            .background(PANEL)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text(statusLine(link), color = Color.White, fontSize = 13.sp, maxLines = 2)
-        Text(statusDetail(link), color = COLOR_DIM, fontSize = 10.sp, maxLines = 2)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("画地为牢", color = BONE, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "ZONE",
+                color = DIM,
+                fontSize = 8.sp,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 1.5.sp,
+            )
+        }
+        Text(
+            text = headerStatus(link),
+            color = DIM,
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 2,
+        )
 
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            when (link.phase) {
-                LinkPhase.IDLE -> Button(onClick = onConnect) { Text("连接") }
-                LinkPhase.ERROR -> Button(onClick = onConnect) { Text("重连") }
-                LinkPhase.CONNECTING -> Text("连接中…", color = COLOR_DIM, fontSize = 12.sp)
-                LinkPhase.WAITING_APP -> Button(onClick = onShowQr) { Text("二维码") }
-                LinkPhase.PAIRED -> OutlinedButton(onClick = onDisconnect) { Text("断开") }
-            }
+        when (link.phase) {
+            LinkPhase.IDLE -> KeyButton("连接", onConnect, compact = true, style = KeyStyle.Ghost, modifier = Modifier.fillMaxWidth())
+            LinkPhase.ERROR -> KeyButton("重连", onConnect, compact = true, style = KeyStyle.Ghost, modifier = Modifier.fillMaxWidth())
+            LinkPhase.CONNECTING -> Text("连接中…", color = DIM, fontSize = 11.sp)
+            LinkPhase.WAITING_APP -> KeyButton("二维码", onShowQr, compact = true, style = KeyStyle.Ghost, modifier = Modifier.fillMaxWidth())
+            LinkPhase.PAIRED -> KeyButton("断开", onDisconnect, compact = true, style = KeyStyle.Ghost, modifier = Modifier.fillMaxWidth())
         }
 
-        Spacer(Modifier.height(2.dp))
-
-        Text(
-            text = statusLabel(ui),
-            color = when {
-                ui.preparing -> COLOR_OK
-                ui.violating -> COLOR_ALERT
-                ui.running -> COLOR_OK
-                else -> COLOR_DIM
-            },
-            fontSize = 13.sp,
-        )
-        Text(
-            text = meterLabel(ui, randomMode, poseMode, poseTolerance, randomRemaining),
-            color = COLOR_DIM,
-            fontSize = 11.sp,
-        )
-
         if (debugMode) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xF0101014), RoundedCornerShape(6.dp))
-                    .padding(6.dp),
-            ) {
+            Column(Modifier.fillMaxWidth().background(INK, RoundedCornerShape(2.dp)).padding(6.dp)) {
                 debugLog.takeLast(3).forEach { entry ->
                     Text(
                         text = formatter.format(Date(entry.timeMs)) + " " + entry.text,
-                        color = Color(0xFFD8D8D8),
-                        fontSize = 9.sp,
+                        color = BONE.copy(alpha = 0.7f),
+                        fontSize = 8.sp,
                         fontFamily = FontFamily.Monospace,
                         maxLines = 1,
                     )
@@ -637,36 +760,56 @@ private fun SidePanel(
 
         Spacer(Modifier.weight(1f))
 
-        Button(
+        KeyButton(
+            text = if (ui.running) "停止" else "开始",
             onClick = onToggleRun,
             enabled = ready || ui.running,
+            style = KeyStyle.Primary,
             modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (ui.running) "停止" else "开始")
-        }
-        OutlinedButton(
+        )
+        KeyButton(
+            text = if (selecting) "完成" else "框选",
             onClick = onToggleSelect,
-            enabled = !randomMode,
+            enabled = !randomMode && !poseMode,
             modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (selecting) "完成" else "框选")
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            KeyButton("镜头", onSwitchCamera, modifier = Modifier.weight(1f))
+            KeyButton("设置", onSettings, modifier = Modifier.weight(1f))
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            OutlinedButton(onClick = onSwitchCamera, modifier = Modifier.weight(1f)) {
-                Text("镜头")
-            }
-            OutlinedButton(onClick = onSettings, modifier = Modifier.weight(1f)) {
-                Text("设置")
-            }
-        }
-        Button(
+        KeyButton(
+            text = "急停",
             onClick = onEmergency,
-            colors = ButtonDefaults.buttonColors(containerColor = COLOR_ALERT),
+            style = KeyStyle.Danger,
             modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("急停")
-        }
+        )
     }
+}
+
+/**
+ * 四角括号（取景器语言，判定框和越界框共用）。
+ */
+private fun DrawScope.drawCornerBrackets(
+    rect: Rect,
+    len: Float,
+    color: Color,
+    strokeWidth: Float,
+) {
+    val l = rect.left
+    val t = rect.top
+    val r = rect.right
+    val b = rect.bottom
+    val lenX = min(len, (r - l) / 2f)
+    val lenY = min(len, (b - t) / 2f)
+
+    drawLine(color, Offset(l, t + lenY), Offset(l, t), strokeWidth = strokeWidth)
+    drawLine(color, Offset(l, t), Offset(l + lenX, t), strokeWidth = strokeWidth)
+    drawLine(color, Offset(r - lenX, t), Offset(r, t), strokeWidth = strokeWidth)
+    drawLine(color, Offset(r, t), Offset(r, t + lenY), strokeWidth = strokeWidth)
+    drawLine(color, Offset(r, b - lenY), Offset(r, b), strokeWidth = strokeWidth)
+    drawLine(color, Offset(r, b), Offset(r - lenX, b), strokeWidth = strokeWidth)
+    drawLine(color, Offset(l + lenX, b), Offset(l, b), strokeWidth = strokeWidth)
+    drawLine(color, Offset(l, b), Offset(l, b - lenY), strokeWidth = strokeWidth)
 }
 
 // --------------------------------------------------------------------- 随机框
@@ -718,37 +861,40 @@ private fun statusLabel(ui: EngineUi): String = when {
     else -> "未开始"
 }
 
-private fun meterLabel(
+private fun meterAnnotated(
     ui: EngineUi,
     randomMode: Boolean,
     poseMode: Boolean,
     poseTolerance: Int,
     randomRemaining: Int,
-): String = buildString {
+): AnnotatedString = buildAnnotatedString {
+    val amber = SpanStyle(color = AMBER, fontWeight = FontWeight.SemiBold)
+    fun value(text: String) = withStyle(amber) { append(text) }
+
     when {
         ui.preparing -> {
             append("倒计时 ")
-            append(ceil(ui.prepareRemainingMs / 1000.0).toInt().coerceAtLeast(1))
+            value(ceil(ui.prepareRemainingMs / 1000.0).toInt().coerceAtLeast(1).toString())
             append("s")
         }
 
         poseMode -> {
             append("偏差 ")
-            append(String.format("%.1f", ui.deviationPercent))
+            value(String.format("%.1f", ui.deviationPercent))
             append("% / 容差 ")
-            append(poseTolerance)
+            value(poseTolerance.toString())
             append("% · 强度 ")
-            append(ui.targetIntensity)
+            value(ui.targetIntensity.toString())
         }
 
         else -> {
             append("越界 ")
-            append(formatSeconds(ui.outsideMs))
+            value(String.format("%.1f", ui.outsideMs / 1000f))
             append("s · 强度 ")
-            append(ui.targetIntensity)
+            value(ui.targetIntensity.toString())
             if (randomMode && ui.running) {
                 append(" · 下一个框 ")
-                append(randomRemaining)
+                value(randomRemaining.toString())
                 append("s")
             }
         }
@@ -763,18 +909,24 @@ private fun DebugPanel(entries: List<DebugEntry>) {
     Column(
         Modifier
             .fillMaxWidth()
-            .background(Color(0xF0101014))
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .background(INK)
+            .padding(horizontal = 14.dp, vertical = 7.dp),
     ) {
-        Text("调试输出 · 不连设备，仅记录", color = COLOR_OK, fontSize = 10.sp)
-        val recent = entries.takeLast(4)
+        Text(
+            text = "DEBUG · 不连设备，仅记录",
+            color = AMBER.copy(alpha = 0.8f),
+            fontSize = 8.sp,
+            fontFamily = FontFamily.Monospace,
+            letterSpacing = 1.5.sp,
+        )
+        val recent = entries.takeLast(3)
         if (recent.isEmpty()) {
-            Text("等待输出…", color = COLOR_DIM, fontSize = 10.sp)
+            Text("等待输出…", color = DIM, fontSize = 10.sp)
         } else {
             recent.forEach { entry ->
                 Text(
                     text = formatter.format(Date(entry.timeMs)) + "  " + entry.text,
-                    color = Color(0xFFD8D8D8),
+                    color = BONE.copy(alpha = 0.8f),
                     fontSize = 10.sp,
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
@@ -952,6 +1104,30 @@ private fun RoiOverlay(
         Canvas(Modifier.fillMaxSize()) {
             if (!overlayMap.valid) return@Canvas
 
+            // 越界：整屏细框 + 四角加粗
+            if (violating) {
+                drawRect(
+                    color = SIGNAL.copy(alpha = 0.5f),
+                    topLeft = Offset(1f, 1f),
+                    size = Size(size.width - 2f, size.height - 2f),
+                    style = Stroke(width = 2f),
+                )
+                drawCornerBrackets(
+                    rect = Rect(8f, 8f, size.width - 8f, size.height - 8f),
+                    len = 34f,
+                    color = SIGNAL,
+                    strokeWidth = 4f,
+                )
+            }
+
+            // 取景框括线（常驻）
+            drawCornerBrackets(
+                rect = Rect(10f, 10f, size.width - 10f, size.height - 10f),
+                len = 20f,
+                color = BONE.copy(alpha = 0.32f),
+                strokeWidth = 1.5f,
+            )
+
             // 前置摄像头是镜像的，两个角的先后顺序会反过来，所以统一取 min/max。
             val cornerA = overlayMap.toView(roi.left, roi.top)
             val cornerB = overlayMap.toView(roi.right, roi.bottom)
@@ -959,27 +1135,32 @@ private fun RoiOverlay(
             val boxTop = min(cornerA.y, cornerB.y)
             val boxWidth = max(cornerA.x, cornerB.x) - boxLeft
             val boxHeight = max(cornerA.y, cornerB.y) - boxTop
-            val topLeft = Offset(boxLeft, boxTop)
-            val boxColor = if (violating) COLOR_ALERT else COLOR_OK
+            val boxColor = if (violating) SIGNAL else MINT
 
             if (showFrameBox) {
                 drawRect(
-                    color = boxColor.copy(alpha = 0.10f),
-                    topLeft = topLeft,
+                    color = boxColor.copy(alpha = 0.07f),
+                    topLeft = Offset(boxLeft, boxTop),
                     size = Size(boxWidth, boxHeight),
                 )
                 drawRect(
-                    color = boxColor,
-                    topLeft = topLeft,
+                    color = boxColor.copy(alpha = 0.55f),
+                    topLeft = Offset(boxLeft, boxTop),
                     size = Size(boxWidth, boxHeight),
                     style = Stroke(
-                        width = 4f,
+                        width = 1.5f,
                         pathEffect = if (selecting) {
-                            PathEffect.dashPathEffect(floatArrayOf(24f, 16f))
+                            PathEffect.dashPathEffect(floatArrayOf(16f, 14f))
                         } else {
                             null
                         },
                     ),
+                )
+                drawCornerBrackets(
+                    rect = Rect(boxLeft, boxTop, boxLeft + boxWidth, boxTop + boxHeight),
+                    len = min(22f, min(boxWidth, boxHeight) * 0.28f),
+                    color = boxColor,
+                    strokeWidth = 3f,
                 )
             }
 
@@ -1002,10 +1183,10 @@ private fun RoiOverlay(
                     !violating
                 }
                 drawLine(
-                    color = if (ok) COLOR_OK else COLOR_ALERT,
+                    color = if (ok) MINT else SIGNAL,
                     start = from,
                     end = to,
-                    strokeWidth = 3f,
+                    strokeWidth = 2.5f,
                     cap = StrokeCap.Round,
                 )
             }
@@ -1015,8 +1196,8 @@ private fun RoiOverlay(
                 val point = points[index]
                 val ok = if (showFrameBox) roi.contains(point.x, point.y) else !violating
                 drawCircle(
-                    color = if (ok) COLOR_OK else COLOR_ALERT,
-                    radius = 5.5f,
+                    color = if (ok) MINT else SIGNAL,
+                    radius = 4f,
                     center = center,
                 )
             }

@@ -2,6 +2,7 @@ package dev.coyotecage.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -65,19 +66,20 @@ fun SettingsSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = Color(0xFF1A1A1A),
+        containerColor = PANEL,
     ) {
         Column(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp)
+                .padding(horizontal = 18.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
             Text(
                 text = "参数",
-                color = Color.White,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
+                color = DIM,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 3.sp,
             )
 
             SectionTitle("强度")
@@ -242,9 +244,15 @@ fun SettingsSheet(
 
 @Composable
 private fun SectionTitle(text: String) {
-    Spacer(Modifier.height(14.dp))
-    Text(text, color = COLOR_OK, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-    Spacer(Modifier.height(2.dp))
+    Spacer(Modifier.height(20.dp))
+    Text(
+        text = text,
+        color = BONE.copy(alpha = 0.52f),
+        fontSize = 9.sp,
+        fontFamily = FontFamily.Monospace,
+        letterSpacing = 3.sp,
+    )
+    Spacer(Modifier.height(6.dp))
 }
 
 @Composable
@@ -254,13 +262,24 @@ private fun SliderRow(
     range: IntRange,
     onChange: (Int) -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth()) {
+    Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(label, color = Color.White, fontSize = 13.sp)
-            Text(value.toString(), color = COLOR_DIM, fontSize = 13.sp)
+            Text(label, color = DIM, fontSize = 12.sp)
+            Text(
+                text = value.toString(),
+                color = AMBER,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .background(AMBER.copy(alpha = 0.07f), RoundedCornerShape(2.dp))
+                    .border(1.dp, AMBER.copy(alpha = 0.28f), RoundedCornerShape(2.dp))
+                    .padding(horizontal = 7.dp, vertical = 3.dp),
+            )
         }
         Slider(
             value = value.coerceIn(range.first, range.last).toFloat(),
@@ -278,7 +297,7 @@ private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
             .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Text(label, color = DIM, fontSize = 12.sp, modifier = Modifier.weight(1f))
         Switch(checked = checked, onCheckedChange = onChange)
     }
 }
@@ -292,19 +311,16 @@ private fun <T> ChoiceRow(
     onSelect: (T) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Text(label, color = Color.White, fontSize = 13.sp)
-        Spacer(Modifier.height(4.dp))
+        Text(label, color = DIM, fontSize = 12.sp)
+        Spacer(Modifier.height(6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             options.forEach { option ->
-                if (option == selected) {
-                    Button(onClick = { onSelect(option) }) {
-                        Text(display(option), fontSize = 12.sp)
-                    }
-                } else {
-                    OutlinedButton(onClick = { onSelect(option) }) {
-                        Text(display(option), fontSize = 12.sp)
-                    }
-                }
+                KeyButton(
+                    text = display(option),
+                    onClick = { onSelect(option) },
+                    compact = true,
+                    style = if (option == selected) KeyStyle.Primary else KeyStyle.Ghost,
+                )
             }
         }
     }
