@@ -30,6 +30,13 @@
   .status{flex:1;min-width:0;text-align:right;color:var(--dim);
     font:11px/1.3 ui-monospace,Consolas,monospace;letter-spacing:.02em;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* 连接方式胶囊：中继 / 蓝牙，点一下直接切 */
+  .chip{flex:0 0 auto;appearance:none;cursor:pointer;padding:7px 9px;border-radius:2px;
+    border:1px solid var(--line);background:transparent;color:var(--dim);
+    font:600 10px/1 ui-monospace,Consolas,monospace;letter-spacing:.14em;
+    transition:color .12s,border-color .12s}
+  .chip:hover{border-color:var(--line-2);color:var(--bone)}
+  .chip.on{color:var(--mint);border-color:rgba(111,227,164,.45)}
 
   /* ---------------- 按键 ---------------- */
   .key{appearance:none;border:1px solid var(--line);background:var(--raise);color:var(--bone);
@@ -153,6 +160,7 @@
   <header class="bar">
     <div class="brand">画地为牢<span class="sub">ZONE</span></div>
     <div class="status" id="status">未连接</div>
+    <button id="btnMode" class="chip" title="切换连接方式">中继</button>
     <button id="btnConn" class="key ghost sm">连接</button>
   </header>
 
@@ -187,6 +195,35 @@
       <button id="btnCloseSet" class="key ghost sm">关闭</button>
     </header>
     <div class="sheet-body">
+
+      <section>
+        <h3>连接</h3>
+        <div class="fields">
+          <label class="field">连接方式
+            <select id="selLink">
+              <option value="relay">中继（DG-LAB Socket）</option>
+              <option value="ble">蓝牙直连（本机 BLE）</option>
+            </select></label>
+          <label class="checkline">调试模式（不连设备，只记录输出） <input type="checkbox" id="cDebug" /></label>
+        </div>
+        <div class="fields hidden" id="rowRelay">
+          <label class="field">中继地址
+            <input type="text" id="txtRelay" spellcheck="false" /></label>
+        </div>
+        <div class="fields hidden" id="rowBle">
+          <label class="field"><span class="line"><span>波形频率平衡 (0–255)</span><output id="oBalF"></output></span>
+            <input type="range" id="rBalF" min="0" max="255" step="1" /></label>
+          <label class="field"><span class="line"><span>波形强度平衡 (0–255)</span><output id="oBalS"></output></span>
+            <input type="range" id="rBalS" min="0" max="255" step="1" /></label>
+        </div>
+        <div class="err hidden" id="bleHint">这个浏览器不支持 Web Bluetooth，蓝牙直连需要桌面 / 安卓版 Chrome 或 Edge，且页面必须是 https 或 localhost。</div>
+        <div class="err hidden" id="bleWarn">蓝牙直连时同一时间只能由本页连接，先断开手机上的 DG-LAB APP。</div>
+      </section>
+
+      <section id="rowDebug" class="hidden">
+        <h3>调试输出</h3>
+        <div id="debugLog"></div>
+      </section>
 
       <section>
         <h3>强度</h3>
@@ -290,35 +327,6 @@
         <label class="field"><span class="line"><span>每行 16 位 HEX · 一帧 8 字节 · 100ms</span></span>
           <textarea id="txtWave" spellcheck="false"></textarea></label>
         <div class="err hidden" id="waveErr">格式不对：每行必须正好 16 个十六进制字符</div>
-      </section>
-
-      <section>
-        <h3>连接</h3>
-        <div class="fields">
-          <label class="field">连接方式
-            <select id="selLink">
-              <option value="relay">中继（DG-LAB Socket）</option>
-              <option value="ble">蓝牙直连（本机 BLE）</option>
-            </select></label>
-          <label class="checkline">调试模式（不连设备，只记录输出） <input type="checkbox" id="cDebug" /></label>
-        </div>
-        <div class="fields hidden" id="rowRelay">
-          <label class="field">中继地址
-            <input type="text" id="txtRelay" spellcheck="false" /></label>
-        </div>
-        <div class="fields hidden" id="rowBle">
-          <label class="field"><span class="line"><span>波形频率平衡 (0–255)</span><output id="oBalF"></output></span>
-            <input type="range" id="rBalF" min="0" max="255" step="1" /></label>
-          <label class="field"><span class="line"><span>波形强度平衡 (0–255)</span><output id="oBalS"></output></span>
-            <input type="range" id="rBalS" min="0" max="255" step="1" /></label>
-        </div>
-        <div class="err hidden" id="bleHint">这个浏览器不支持 Web Bluetooth，蓝牙直连需要桌面 / 安卓版 Chrome 或 Edge，且页面必须是 https 或 localhost。</div>
-        <div class="err hidden" id="bleWarn">蓝牙直连时同一时间只能由本页连接，先断开手机上的 DG-LAB APP。</div>
-      </section>
-
-      <section id="rowDebug" class="hidden">
-        <h3>调试输出</h3>
-        <div id="debugLog"></div>
       </section>
 
       <div class="actions">
@@ -1835,6 +1843,13 @@ function renderStatus() {
   }
 
   $('btnRun').disabled = !(dg.phase === 'paired' || isLive());
+
+  const chip = $('btnMode');
+  const ble = S.linkMode === 'ble';
+  chip.textContent = ble ? '蓝牙' : '中继';
+  chip.classList.toggle('on', ble);
+  chip.title = ble ? '当前：蓝牙直连（点击切回中继）' : '当前：中继（点击切到蓝牙直连）';
+
   $('rowDebug').classList.toggle('hidden', !S.debugMode);
   $('cDebug').checked = S.debugMode;
   if (S.debugMode) renderDebugLog();
@@ -2021,6 +2036,19 @@ function pushSoftLimit() {
   if (dg === bleLink && bleLink.phase === 'paired') bleLink.writeSoftLimit();
 }
 
+/** 切连接方式：先把当前链路断干净再记偏好。顶栏胶囊和设置下拉共用这一个入口。 */
+function setLinkMode(mode) {
+  const next = mode === 'ble' ? 'ble' : 'relay';
+  if (S.linkMode !== next) {
+    try { dg.disconnect(); } catch {}
+    S.linkMode = next;
+    saveSettings();
+  }
+  $('selLink').value = next;
+  syncLinkRows();
+  renderStatus();
+}
+
 function initSettingsUI() {
   bindRange('rBase', 'oBase', 'base');
   bindRange('rMax', 'oMax', 'max');
@@ -2052,12 +2080,7 @@ function initSettingsUI() {
 
   // ---- 连接方式 ----
   bindSelect('selLink', 'linkMode');
-  $('selLink').addEventListener('change', () => {
-    // 换方式前先把当前链路断干净，避免边连边切
-    try { dg.disconnect(); } catch {}
-    syncLinkRows();
-    renderStatus();
-  });
+  $('selLink').addEventListener('change', () => setLinkMode($('selLink').value));
   bindRange('rBalF', 'oBalF', 'balFreq');
   bindRange('rBalS', 'oBalS', 'balStrength');
   $('rBalF').addEventListener('input', pushSoftLimit);
@@ -2137,6 +2160,7 @@ function initSettingsUI() {
 }
 
 $('btnSet').onclick = () => { if (!$('dlgSet').open) $('dlgSet').showModal(); };
+$('btnMode').onclick = () => setLinkMode(S.linkMode === 'ble' ? 'relay' : 'ble');
 $('btnCloseSet').onclick = () => $('dlgSet').close();
 $('btnTest').onclick = async () => {
   if (isLive() || testTimer !== null || dg.phase !== 'paired') return;

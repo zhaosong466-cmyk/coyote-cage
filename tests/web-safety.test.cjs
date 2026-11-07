@@ -84,6 +84,7 @@ function page() {
        S.askDuration = false;`);
   // 面板初始化会挂上所有 input/change 监听，测试里也照做一遍
   run('initSettingsUI();');
+  run('renderStatus();');
   return {
     html, run, sent, elements, timers, bleWrites, ble,
     tick(ms = 60) { now += ms; for (const fn of [...intervals.values()]) fn(); },
@@ -601,4 +602,41 @@ test('蓝牙模式下判定链路照常工作', async () => {
   assert.ok(b0, '应该往蓝牙发 B0');
   assert.equal(b0[2], 5, '惩罚强度走的是 A 通道绝对设定');
   assert.notDeepEqual(b0.slice(8, 12), [0, 0, 0, 101], 'A 通道要有波形');
+});
+
+// ============================================================ 连接方式入口
+
+test('顶栏胶囊一键切换连接方式，并同步设置里的下拉', () => {
+  const p = page();
+  assert.equal(p.run('S.linkMode'), 'relay');
+  assert.equal(p.elements.get('btnMode').textContent, '中继');
+
+  p.elements.get('btnMode').onclick();
+  assert.equal(p.run('S.linkMode'), 'ble');
+  assert.equal(p.elements.get('btnMode').textContent, '蓝牙');
+  assert.equal(p.run('$("selLink").value'), 'ble');
+
+  p.elements.get('btnMode').onclick();
+  assert.equal(p.run('S.linkMode'), 'relay');
+  assert.equal(p.elements.get('btnMode').textContent, '中继');
+});
+
+test('切换连接方式会断开并收摊正在跑的会话', () => {
+  const p = page();
+  start(p);
+  assert.equal(p.run('state'), 'running');
+
+  p.elements.get('btnMode').onclick();
+  assert.equal(p.run('S.linkMode'), 'ble');
+  assert.equal(p.run('dg.phase'), 'idle');
+  assert.equal(p.run('state'), 'ended');
+});
+
+test('连接设置组挪到了面板最上面', () => {
+  const p = page();
+  const body = p.html.slice(p.html.indexOf('<div class="sheet-body">'));
+  const firstSection = body.indexOf('<h3>');
+  const connectAt = body.indexOf('<h3>连接</h3>');
+  assert.ok(connectAt > 0);
+  assert.equal(connectAt, firstSection, '第一组就应该能看到连接方式');
 });
