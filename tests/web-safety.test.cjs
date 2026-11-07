@@ -62,6 +62,7 @@ function page() {
     document: { getElementById: element, createElement: () => element('el-' + nextTimer++) },
     window: { addEventListener() {}, devicePixelRatio: 1 },
     navigator: {
+      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) Chrome/120.0.0.0 Safari/537.36',
       bluetooth: {
         requestDevice: async () => {
           if (ble.failNext) throw new Error('用户取消');
@@ -604,7 +605,52 @@ test('蓝牙模式下判定链路照常工作', async () => {
   assert.notDeepEqual(b0.slice(8, 12), [0, 0, 0, 101], 'A 通道要有波形');
 });
 
-// ============================================================ 连接方式入口
+// ============================================================ 姿态模型加载
+
+test('模型加载顺序：本机模型永远第一，WebView 里把 GPU 排到最后', () => {
+  const p = page();
+  const order = (flag) => JSON.parse(p.run(`JSON.stringify(poseAttempts(${flag}))`));
+
+  const webview = order(true);
+  const chrome = order(false);
+
+  assert.ok(webview[0][0].includes('./models/'), 'WebView 先试本机模型');
+  assert.equal(webview.at(-1)[1], 'GPU', 'WebView 里 GPU 必须放最后（会挂死）');
+  assert.deepEqual(webview.map((a) => a[1]), ['CPU', 'CPU', 'GPU']);
+
+  assert.ok(chrome[0][0].includes('./models/'), '浏览器也先试本机模型');
+  assert.equal(chrome[0][1], 'GPU', '普通浏览器仍然优先 GPU');
+  assert.deepEqual(chrome.map((a) => a[1]), ['GPU', 'CPU', 'CPU']);
+});
+
+test('加载阶段超时会变成可处理的失败，而不是永远挂着', async () => {
+  const p = page();
+  const pending = p.run('withTimeout(new Promise(() => {}), 1000, "加载模型")');
+  const settled = Promise.resolve(pending).then(
+    () => 'resolved',
+    (e) => e.message,
+  );
+  p.advance(1500);
+  const message = await settled;
+  assert.match(message, /加载模型超过 1 秒没有响应/);
+});
+
+test('超时不会把已经成功的加载误判成失败', async () => {
+  const p = page();
+  const value = await p.run('withTimeout(Promise.resolve(42), 5000, "加载模型")');
+  assert.equal(value, 42);
+});
+
+test('WebView 的 UA 能识别出来', () => {
+  const p = page();
+  const prev = p.run('navigator.userAgent');
+  p.run('navigator.userAgent = "Mozilla/5.0 (Linux; Android 13; X) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0.0.0 Mobile Safari/537.36"');
+  assert.equal(p.run('isWebView()'), false);
+  p.run('navigator.userAgent = "Mozilla/5.0 (Linux; Android 13; X; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0.0.0 Mobile Safari/537.36"');
+  assert.equal(p.run('isWebView()'), true);
+  p.run(`navigator.userAgent = ${JSON.stringify(prev)}`);
+});
+
 
 test('顶栏胶囊一键切换连接方式，并同步设置里的下拉', () => {
   const p = page();

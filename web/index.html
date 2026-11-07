@@ -91,7 +91,9 @@
   .hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none;
     max-width:86%;padding:10px 14px;border:1px solid var(--line);border-radius:2px;
     background:rgba(8,9,11,.82);color:var(--bone);font-size:12px;line-height:1.7;
-    text-align:center;backdrop-filter:blur(4px)}
+    text-align:center;white-space:pre-wrap;backdrop-filter:blur(4px)}
+  .hint.retry{pointer-events:auto;cursor:pointer;border-color:var(--line-2)}
+  .hint.retry:hover{border-color:var(--bone)}
 
   /* ---------------- 控制带 ---------------- */
   .strip{display:flex;justify-content:center;gap:8px;
@@ -1218,13 +1220,18 @@ async function startCamera(mode) {
   resizeOverlay();
 }
 
+/** 逐个试 CDN；每个都带超时，免得某个源「挂住不报错」把后手也堵死。 */
 async function loadTasks() {
-  try {
-    return await import(MODULE_PRIMARY);
-  } catch (e) {
-    console.warn('[pose] primary CDN failed, trying fallback', e);
-    return await import(MODULE_FALLBACK);
+  const failures = [];
+  for (const source of [MODULE_PRIMARY, MODULE_FALLBACK]) {
+    try {
+      return await withTimeout(import(source), 15000, '下载推理引擎');
+    } catch (e) {
+      failures.push(source + '：' + (e && e.message ? e.message : e));
+      console.warn('[pose] 模块加载失败', source, e);
+    }
   }
+  throw new Error(failures.join('；'));
 }
 
 // ---- 关键点中值滤波：按时间窗（不是帧数），30fps 和 10fps 行为一致 ----
@@ -1271,9 +1278,69 @@ function handlePoseResult(result) {
   latest = { points: smoothPoints(poseBuffer, raw), ts: now };
 }
 
+// ---- 模型加载：分阶段超时 + 已用秒数 + 失败可重试 ----
+
+/** 每个阶段最多等多久。WebView 里 GPU 委托会静默挂死，不设超时就会永远停在提示上。 */
+const STAGE_TIMEOUT_MS = 25000;
+
+/** 把 promise 套上超时，超时也变成一次可处理的失败。 */
+function withTimeout(promise, ms, label) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(label + '超过 ' + Math.round(ms / 1000) + ' 秒没有响应')),
+      ms,
+    );
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+let loadingTimer = null;
+
+/** 加载中的提示，每秒刷新已用时间，让「卡住」和「慢」能区分开。 */
+function showLoading(text) {
+  stopLoading();
+  const started = performance.now();
+  const paint = () => {
+    const sec = Math.floor((performance.now() - started) / 1000);
+    setHint(text + (sec > 0 ? '（' + sec + 's）' : ''), true);
+  };
+  paint();
+  loadingTimer = setInterval(paint, 1000);
+}
+
+function stopLoading() {
+  if (loadingTimer !== null) clearInterval(loadingTimer);
+  loadingTimer = null;
+}
+
+const isWebView = () => /;\s*wv\)/.test(navigator.userAgent || '');
+
+/**
+ * 要试的「模型 × 委托」顺序。
+ * 本机模型放第一位：同源、不走 CDN，也不再依赖 storage.googleapis.com。
+ * WebView 里排到最后才试 GPU —— 它的 GPU 委托会挂死不 reject，是这次卡住的元凶。
+ */
+function poseAttempts(webview) {
+  const local = MODEL_URLS[1];
+  const cdn = MODEL_URLS[0];
+  return webview
+    ? [[local, 'CPU'], [cdn, 'CPU'], [cdn, 'GPU']]
+    : [[local, 'GPU'], [local, 'CPU'], [cdn, 'CPU']];
+}
+
 async function startPose() {
+  showLoading('正在下载推理引擎…');
   const { FilesetResolver, PoseLandmarker } = await loadTasks();
-  const fileset = await FilesetResolver.forVisionTasks(WASM_PATH);
+
+  showLoading('正在准备 wasm…');
+  const fileset = await withTimeout(
+    FilesetResolver.forVisionTasks(WASM_PATH),
+    STAGE_TIMEOUT_MS,
+    '加载推理引擎',
+  );
 
   const create = (modelUrl, delegate) => PoseLandmarker.createFromOptions(fileset, {
     baseOptions: { modelAssetPath: modelUrl, delegate },
@@ -1285,15 +1352,14 @@ async function startPose() {
     resultCallback: handlePoseResult,
   });
 
-  const attempts = [
-    [MODEL_URLS[0], 'GPU'],
-    [MODEL_URLS[0], 'CPU'],
-    [MODEL_URLS[1], 'CPU'],
-  ];
   let lastError = null;
-  for (const [url, delegate] of attempts) {
+  const attempts = poseAttempts(isWebView());
+  for (let i = 0; i < attempts.length; i++) {
+    const [url, delegate] = attempts[i];
+    const name = url === MODEL_URLS[1] ? '本机模型' : '在线模型';
+    showLoading(`正在加载${name}（${delegate}，第 ${i + 1}/${attempts.length} 次）…`);
     try {
-      pose = await create(url, delegate);
+      pose = await withTimeout(create(url, delegate), STAGE_TIMEOUT_MS, `加载${name}（${delegate}）`);
       lastError = null;
       break;
     } catch (e) {
@@ -2254,6 +2320,36 @@ window.addEventListener('pagehide', () => {
   }
 });
 
+let looping = false;
+
+/** 加载姿态模型；失败时把原因写在画面中间，点一下就能重试。 */
+async function loadPose() {
+  try {
+    await startPose();
+    stopLoading();
+    hint.classList.remove('retry');
+    hint.onclick = null;
+    setHint('', false);
+    if (!looping) {
+      looping = true;
+      requestAnimationFrame(loop);
+    }
+    return true;
+  } catch (e) {
+    console.error('[pose] 加载失败', e);
+    stopLoading();
+    const msg = (e && e.message) ? e.message : String(e);
+    setHint('姿态模型加载失败：' + msg + '\n点这里重试', true);
+    hint.classList.add('retry');
+    hint.onclick = () => {
+      hint.onclick = null;
+      hint.classList.remove('retry');
+      loadPose();
+    };
+    return false;
+  }
+}
+
 async function boot() {
   initSettingsUI();
   renderStatus();
@@ -2262,22 +2358,12 @@ async function boot() {
 
   try {
     await startCamera(facing);
-    setHint('正在加载姿态模型…', true);
   } catch (e) {
     setHint('摄像头打不开：' + e.message);
     return;
   }
 
-  try {
-    await startPose();
-    setHint('', false);
-  } catch (e) {
-    console.error(e);
-    setHint('模型加载失败：' + e.message + '（需要能访问 cdn.jsdelivr.net 与 storage.googleapis.com）');
-    return;
-  }
-
-  requestAnimationFrame(loop);
+  await loadPose();
 }
 
 boot();
