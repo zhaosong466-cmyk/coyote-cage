@@ -295,10 +295,25 @@
       <section>
         <h3>连接</h3>
         <div class="fields">
+          <label class="field">连接方式
+            <select id="selLink">
+              <option value="relay">中继（DG-LAB Socket）</option>
+              <option value="ble">蓝牙直连（本机 BLE）</option>
+            </select></label>
           <label class="checkline">调试模式（不连设备，只记录输出） <input type="checkbox" id="cDebug" /></label>
+        </div>
+        <div class="fields hidden" id="rowRelay">
           <label class="field">中继地址
             <input type="text" id="txtRelay" spellcheck="false" /></label>
         </div>
+        <div class="fields hidden" id="rowBle">
+          <label class="field"><span class="line"><span>波形频率平衡 (0–255)</span><output id="oBalF"></output></span>
+            <input type="range" id="rBalF" min="0" max="255" step="1" /></label>
+          <label class="field"><span class="line"><span>波形强度平衡 (0–255)</span><output id="oBalS"></output></span>
+            <input type="range" id="rBalS" min="0" max="255" step="1" /></label>
+        </div>
+        <div class="err hidden" id="bleHint">这个浏览器不支持 Web Bluetooth，蓝牙直连需要桌面 / 安卓版 Chrome 或 Edge，且页面必须是 https 或 localhost。</div>
+        <div class="err hidden" id="bleWarn">蓝牙直连时同一时间只能由本页连接，先断开手机上的 DG-LAB APP。</div>
       </section>
 
       <section id="rowDebug" class="hidden">
@@ -407,6 +422,11 @@ const DEFAULTS = {
   teaseWaveform: '',
   waveform: PRESETS['轻叩'],
   relay: 'wss://trex.dungeon-lab.cn/v4',
+  // 连接方式：relay = 走中继 + 外设 App，ble = 本机蓝牙直连郊狼主机
+  linkMode: 'relay',
+  // BLE 的 BF 指令参数：只写进设备，用来兜住强度上限和调整高低频手感
+  balFreq: 0,
+  balStrength: 0,
   // 调试模式：不连设备，只把要下发的指令记进调试输出
   debugMode: false,
 };
@@ -583,6 +603,7 @@ function setHint(text, visible = true) {
 
 class Dglab {
   constructor() {
+    this.kind = 'relay';
     this.ws = null;
     this.phase = 'idle';
     this.controllerId = null;
@@ -867,7 +888,298 @@ class Dglab {
   }
 }
 
-const dg = new Dglab();
+// ============================================================ 蓝牙直连（郊狼 3.0）
+
+// 服务 0x180C：0x150A 写 / 0x150B 通知；电量服务 0x180A：0x1500 读
+const BLE_SERVICE = 0x180c;
+const BLE_WRITE_CHAR = 0x150a;
+const BLE_NOTIFY_CHAR = 0x150b;
+const BLE_BATT_SERVICE = 0x180a;
+const BLE_BATT_CHAR = 0x1500;
+const BLE_PUMP_MS = 100;
+
+/** 16 位 HEX 帧 → 8 字节（前 4 频率，后 4 强度）。 */
+function hexToBytes(frame) {
+  if (typeof frame !== 'string' || frame.length !== 16) return null;
+  const out = new Uint8Array(8);
+  for (let i = 0; i < 8; i++) {
+    const b = parseInt(frame.slice(i * 2, i * 2 + 2), 16);
+    if (!Number.isFinite(b)) return null;
+    out[i] = b;
+  }
+  return out;
+}
+
+/**
+ * 本机直连郊狼主机的传输层。对外接口和 [Dglab] 一致
+ * （phase/devices/intensity/battery/onchange + setIntensity/pulse/clear/zero/emergency），
+ * 判定和输出节奏的代码完全不用改。
+ *
+ * 协议要点（DG-LAB V3 官方文档）：
+ * - B0 指令 20 字节，每 100ms 写一次：HEAD + (序列号<<4 | 强度解读方式) + A强度 + B强度
+ *   + A频率×4 + A强度×4 + B频率×4 + B强度×4
+ * - 强度解读方式：高 2 bit 是 A、低 2 bit 是 B，3 = 绝对设定；序列号 0 表示不要回执
+ * - 某通道 4 组数据里只要有一条强度 >100，该通道这 100ms 全部丢弃 → 用来实现「只打一路」
+ * - BF 指令 7 字节：HEAD + A软上限 + B软上限 + A频率平衡 + B频率平衡 + A强度平衡 + B强度平衡
+ *   软上限断电保存，所以每次重连都必须重写
+ */
+class BleCoyote {
+  constructor() {
+    this.kind = 'ble';
+    this.phase = 'idle';
+    this.controllerId = null;
+    this.appId = null;
+    this.devices = [];
+    this.intensity = [0, 0];
+    this.battery = null;
+    this.message = '';
+    this.onchange = () => {};
+    // 与 Dglab 保持同样的字段，renderStatus 才能一视同仁
+    this.debugMode = false;
+    this.debugLog = [];
+
+    this.device = null;
+    this.writeChar = null;
+    this.noResponse = false;
+    this.pumpTimer = null;
+    /** 应用想要的强度；下一包用绝对设定推过去。 */
+    this.desired = [0, 0];
+    /** 最后成功下发过的强度，-1 表示「和 desired 不一致」需要重推。 */
+    this.sent = [-1, -1];
+    /** 每个通道待播的波形帧，一帧一个 100ms。 */
+    this.waveQueue = [[], []];
+  }
+
+  emit() { this.onchange(); }
+
+  async connect() {
+    this.teardown(false);
+
+    if (!navigator.bluetooth) {
+      this.phase = 'error';
+      this.message = '这个浏览器不支持 Web Bluetooth';
+      this.emit();
+      return;
+    }
+
+    this.phase = 'connecting';
+    this.emit();
+
+    let device;
+    try {
+      device = await navigator.bluetooth.requestDevice({
+        filters: [{ namePrefix: '47L' }],
+        optionalServices: [BLE_SERVICE, BLE_BATT_SERVICE],
+      });
+    } catch (e) {
+      // 用户取消选择不算错误
+      this.phase = 'idle';
+      this.message = '';
+      this.emit();
+      return;
+    }
+
+    this.device = device;
+    device.addEventListener('gattserverdisconnected', () => {
+      if (this.device === device) this.teardown(true);
+    });
+
+    try {
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService(BLE_SERVICE);
+      this.writeChar = await service.getCharacteristic(BLE_WRITE_CHAR);
+      this.noResponse = !!(this.writeChar.properties && this.writeChar.properties.writeWithoutResponse);
+
+      const notifyChar = await service.getCharacteristic(BLE_NOTIFY_CHAR);
+      notifyChar.addEventListener('characteristicvaluechanged', (ev) => this.onNotify(ev.target.value));
+      await notifyChar.startNotifications();
+
+      this.phase = 'paired';
+      this.appId = device.id || 'ble';
+      this.devices = [{ slotId: 'ble', name: device.name || '郊狼 3.0', type: 'COYOTE_030' }];
+      this.message = '';
+
+      this.writeSoftLimit();
+      this.readBattery(server).catch(() => {});
+      this.startPump();
+      this.emit();
+    } catch (e) {
+      const msg = e && e.message ? e.message : String(e);
+      this.teardown(false);
+      this.phase = 'error';
+      this.message = '蓝牙连接失败：' + msg;
+      this.emit();
+    }
+  }
+
+  disconnect() {
+    this.teardown(true);
+  }
+
+  /** 断开并清空一切；[emitEvent] 用来避免断链回调里重复通知。 */
+  teardown(emitEvent) {
+    this.stopPump();
+    const device = this.device;
+    this.device = null;
+    this.writeChar = null;
+    if (device) {
+      try { device.gatt.disconnect(); } catch {}
+    }
+    this.phase = 'idle';
+    this.controllerId = null;
+    this.appId = null;
+    this.devices = [];
+    this.intensity = [0, 0];
+    this.battery = null;
+    this.message = '';
+    this.desired = [0, 0];
+    this.sent = [-1, -1];
+    this.waveQueue = [[], []];
+    if (emitEvent) this.emit();
+  }
+
+  startPump() {
+    this.stopPump();
+    this.pump();
+    this.pumpTimer = setInterval(() => this.pump(), BLE_PUMP_MS);
+  }
+
+  stopPump() {
+    if (this.pumpTimer !== null) clearInterval(this.pumpTimer);
+    this.pumpTimer = null;
+  }
+
+  write(buf) {
+    if (!this.writeChar) return false;
+    try {
+      if (this.noResponse) {
+        this.writeChar.writeValueWithoutResponse(buf);
+      } else {
+        const p = this.writeChar.writeValue(buf);
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** BF：强度软上限 + 波形平衡参数。软上限断电保存，每次重连都要写。 */
+  writeSoftLimit() {
+    const limit = Math.max(0, Math.min(200, Math.round(S.max)));
+    const balF = S.balFreq & 0xff;
+    const balS = S.balStrength & 0xff;
+    this.write(new Uint8Array([0xbf, limit, limit, balF, balF, balS, balS]));
+  }
+
+  /** 塞一帧波形给某个通道；不足 100ms 的部分由下一包补空。 */
+  pulse(frames, durationMs, channel) {
+    if (!frames || !frames.length) return;
+    this.waveQueue[channel] = frames.slice();
+  }
+
+  clear(channel) {
+    this.waveQueue[channel] = [];
+  }
+
+  setIntensity(target, channel) {
+    const v = Math.max(0, Math.min(200, Math.round(target)));
+    this.desired[channel] = v;
+  }
+
+  zero(channel) {
+    this.desired[channel] = 0;
+  }
+
+  emergency() {
+    this.waveQueue = [[], []];
+    this.desired = [0, 0];
+    this.sent = [-1, -1];
+    this.intensity = [0, 0];
+    this.pump();
+    this.emit();
+  }
+
+  /** 发一包 B0：强度按需绝对设定，波形按队列逐帧取。 */
+  pump() {
+    if (this.phase !== 'paired' || !this.writeChar) return;
+    const buf = new Uint8Array(20);
+    buf[0] = 0xb0;
+
+    const modeA = this.desired[0] !== this.sent[0] ? 3 : 0;
+    const modeB = this.desired[1] !== this.sent[1] ? 3 : 0;
+    buf[1] = (modeA << 2) | modeB; // 序列号固定 0：不要回执，省一次往返
+    buf[2] = modeA ? this.desired[0] : 0;
+    buf[3] = modeB ? this.desired[1] : 0;
+    if (modeA) { this.sent[0] = this.desired[0]; this.intensity[0] = this.desired[0]; }
+    if (modeB) { this.sent[1] = this.desired[1]; this.intensity[1] = this.desired[1]; }
+
+    this.fillWave(buf, 0, 4);
+    this.fillWave(buf, 1, 12);
+    this.write(buf);
+  }
+
+  fillWave(buf, channel, offset) {
+    const queue = this.waveQueue[channel];
+    const frame = queue.length ? hexToBytes(queue.shift()) : null;
+    if (frame) {
+      buf.set(frame.subarray(0, 4), offset);      // 4 组频率
+      buf.set(frame.subarray(4, 8), offset + 4);  // 4 组强度
+      return;
+    }
+    // 无效数据：频率 0（合法下限是 10）+ 强度 101，主机整段丢弃 → 这一路不输出
+    buf.fill(0, offset, offset + 7);
+    buf[offset + 7] = 101;
+  }
+
+  onNotify(value) {
+    if (!value) return;
+    const data = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    if (data[0] !== 0xb1 || data.length < 4) return;
+    this.intensity[0] = data[2];
+    this.intensity[1] = data[3];
+    // 拨轮被手动动过：标记成不一致，下一包用绝对设定压回应用的值
+    if (data[2] !== this.desired[0]) this.sent[0] = -1;
+    if (data[3] !== this.desired[1]) this.sent[1] = -1;
+    this.emit();
+  }
+
+  async readBattery(server) {
+    const svc = await server.getPrimaryService(BLE_BATT_SERVICE);
+    const ch = await svc.getCharacteristic(BLE_BATT_CHAR);
+    const value = await ch.readValue();
+    this.battery = value.getUint8(0);
+    this.emit();
+  }
+}
+
+const relayLink = new Dglab();
+const bleLink = new BleCoyote();
+let dg = relayLink;
+
+/** 切传输层：先把旧链路断干净，再把状态回调挂到新实例上。 */
+function useLink(next) {
+  if (dg === next) return;
+  try { dg.disconnect(); } catch {}
+  dg = next;
+  dg.onchange = renderStatus;
+}
+
+/** 「连接」按当前意图走：先看调试模式，再看蓝牙还是中继。 */
+function connectNow() {
+  if (S.debugMode) {
+    useLink(relayLink);
+    dg.connectDebug();
+    return;
+  }
+  if (S.linkMode === 'ble') {
+    useLink(bleLink);
+    dg.connect();
+    return;
+  }
+  useLink(relayLink);
+  dg.connect(S.relay);
+}
 
 // ============================================================ 摄像头 & 模型
 
@@ -1467,12 +1779,6 @@ setInterval(() => {
 
 // ============================================================ 顶部状态
 
-/** 「连接」按当前意图走：调试模式开就连假的，否则连中继。 */
-function connectNow() {
-  if (S.debugMode) dg.connectDebug();
-  else dg.connect(S.relay);
-}
-
 function renderDebugLog() {
   const box = $('debugLog');
   if (!box) return;
@@ -1498,11 +1804,12 @@ function renderStatus() {
   if (isLive() && dg.phase !== 'paired') endSession('disconnected');
 
   if (dg.phase === 'idle') {
-    el.textContent = S.debugMode ? '未连接 · 调试模式' : '未连接';
-    btn.textContent = '连接';
+    const ble = S.linkMode === 'ble' && !S.debugMode;
+    el.textContent = S.debugMode ? '未连接 · 调试模式' : ble ? '未连接 · 蓝牙直连' : '未连接';
+    btn.textContent = ble ? '蓝牙连接' : '连接';
     btn.onclick = connectNow;
   } else if (dg.phase === 'connecting') {
-    el.textContent = '正在连接中继…';
+    el.textContent = S.linkMode === 'ble' && !S.debugMode ? '正在连接蓝牙…' : '正在连接中继…';
     btn.textContent = '连接中…';
     btn.disabled = true;
   } else if (dg.phase === 'waiting') {
@@ -1515,7 +1822,10 @@ function renderStatus() {
     if (dev) bits.push(dev.name || dev.type || '郊狼');
     bits.push(`A ${dg.intensity[0]} / B ${dg.intensity[1]}`);
     if (dg.battery !== null) bits.push(`${dg.battery}%`);
-    el.textContent = (dg.debugMode ? '调试中（不连接设备） · ' : '已连接 · ') + bits.join(' · ');
+    const prefix = dg.debugMode
+      ? '调试中（不连接设备） · '
+      : dg.kind === 'ble' ? '蓝牙已连接 · ' : '已连接 · ';
+    el.textContent = prefix + bits.join(' · ');
     btn.textContent = '断开';
     btn.onclick = () => dg.disconnect();
   } else {
@@ -1695,6 +2005,22 @@ function syncTease() {
   $('rowTeaseTest').classList.toggle('hidden', !S.tease);
 }
 
+const hasBluetooth = () => typeof navigator !== 'undefined' && !!navigator.bluetooth;
+
+/** 连接方式联动：中继地址 / 蓝牙平衡参数各自只在对应模式下显示。 */
+function syncLinkRows() {
+  const ble = S.linkMode === 'ble';
+  $('rowRelay').classList.toggle('hidden', ble);
+  $('rowBle').classList.toggle('hidden', !ble);
+  $('bleHint').classList.toggle('hidden', !ble || hasBluetooth());
+  $('bleWarn').classList.toggle('hidden', !ble);
+}
+
+/** 软上限断电保存，改了强度上限或平衡参数就立刻推给设备。 */
+function pushSoftLimit() {
+  if (dg === bleLink && bleLink.phase === 'paired') bleLink.writeSoftLimit();
+}
+
 function initSettingsUI() {
   bindRange('rBase', 'oBase', 'base');
   bindRange('rMax', 'oMax', 'max');
@@ -1723,6 +2049,21 @@ function initSettingsUI() {
   bindSelect('selFrame', 'frameMode');
   $('selFrame').addEventListener('change', syncFrameRows);
   syncFrameRows();
+
+  // ---- 连接方式 ----
+  bindSelect('selLink', 'linkMode');
+  $('selLink').addEventListener('change', () => {
+    // 换方式前先把当前链路断干净，避免边连边切
+    try { dg.disconnect(); } catch {}
+    syncLinkRows();
+    renderStatus();
+  });
+  bindRange('rBalF', 'oBalF', 'balFreq');
+  bindRange('rBalS', 'oBalS', 'balStrength');
+  $('rBalF').addEventListener('input', pushSoftLimit);
+  $('rBalS').addEventListener('input', pushSoftLimit);
+  $('rMax').addEventListener('input', pushSoftLimit);
+  syncLinkRows();
 
   // ---- 挑逗 ----
   const tease = $('cTease');
@@ -1881,6 +2222,13 @@ $('btnCloseQr').onclick = () => $('dlgQr').close();
 
 window.addEventListener('resize', resizeOverlay);
 new ResizeObserver(resizeOverlay).observe(stage);
+
+// 关页面时尽量把蓝牙直连的强度归零再断开（尽力而为，异步写不保证完成）
+window.addEventListener('pagehide', () => {
+  if (dg === bleLink && bleLink.phase === 'paired') {
+    try { bleLink.emergency(); bleLink.disconnect(); } catch {}
+  }
+});
 
 async function boot() {
   initSettingsUI();

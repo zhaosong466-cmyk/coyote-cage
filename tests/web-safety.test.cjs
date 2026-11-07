@@ -26,16 +26,53 @@ function page() {
   let now = 10000;
   let nextTimer = 1;
   const timers = new Map();
-  const intervals = [];
+  const intervals = new Map();
   const sent = [];
+
+  // ---- Web Bluetooth 假桩：记录每一条写进 0x150A 的指令 ----
+  const bleWrites = [];
+  const ble = { notify: null, failNext: false };
+  const bleWriteChar = {
+    properties: { write: true, writeWithoutResponse: true },
+    writeValueWithoutResponse(buf) { bleWrites.push(Array.from(buf)); },
+    writeValue(buf) { bleWrites.push(Array.from(buf)); return Promise.resolve(); },
+  };
+  const bleNotifyChar = {
+    addEventListener(type, fn) { if (type === 'characteristicvaluechanged') ble.notify = fn; },
+    startNotifications: async () => {},
+  };
+  const bleServer = {
+    getPrimaryService: async (uuid) => {
+      if (uuid === 0x180a) {
+        return { getCharacteristic: async () => ({ readValue: async () => ({ getUint8: () => 88 }) }) };
+      }
+      return { getCharacteristic: async (c) => (c === 0x150a ? bleWriteChar : bleNotifyChar) };
+    },
+  };
+  const bleDevice = {
+    name: '47L121000',
+    id: 'ble-1',
+    addEventListener() {},
+    gatt: { connected: true, connect: async () => bleServer, disconnect() {} },
+  };
+
   const context = vm.createContext({
     console, performance: { now: () => now },
     crypto: { randomUUID: () => String(nextTimer++) },
     document: { getElementById: element, createElement: () => element('el-' + nextTimer++) },
     window: { addEventListener() {}, devicePixelRatio: 1 },
+    navigator: {
+      bluetooth: {
+        requestDevice: async () => {
+          if (ble.failNext) throw new Error('用户取消');
+          return bleDevice;
+        },
+      },
+    },
     ResizeObserver: class { observe() {} },
     localStorage: { getItem: () => null }, WebSocket: { OPEN: 1 },
-    setInterval: (fn) => intervals.push(fn),
+    setInterval: (fn) => { const id = nextTimer++; intervals.set(id, fn); return id; },
+    clearInterval: (id) => intervals.delete(id),
     setTimeout: (fn, ms) => { const id = nextTimer++; timers.set(id, { fn, at: now + ms }); return id; },
     clearTimeout: (id) => timers.delete(id),
   });
@@ -48,11 +85,17 @@ function page() {
   // 面板初始化会挂上所有 input/change 监听，测试里也照做一遍
   run('initSettingsUI();');
   return {
-    html, run, sent, elements, timers,
-    tick(ms = 60) { now += ms; intervals.forEach((fn) => fn()); },
+    html, run, sent, elements, timers, bleWrites, ble,
+    tick(ms = 60) { now += ms; for (const fn of [...intervals.values()]) fn(); },
     fire(id, type) { const h = element(id).handlers[type]; if (h) h({ target: element(id) }); },
     /** 重新挂上 WebSocket 假桩（dg.disconnect() 会把它清掉）。 */
     attach() { run('dg.ws = { readyState: 1, send: capture };'); },
+    /** 模拟主机通过 0x150B 回一条 B1。 */
+    notify(bytes) {
+      if (!ble.notify) return;
+      const dv = new DataView(Uint8Array.from(bytes).buffer);
+      ble.notify({ target: { value: dv } });
+    },
     advance(ms) {
       now += ms;
       for (const [id, timer] of [...timers]) {
@@ -421,8 +464,7 @@ test('调试日志能读懂归零和清队列', () => {
   assert.equal(p.sent.length, 0);
 });
 
-test('关掉调试模式后恢复真实下发', () => {
-  const p = page();
+test('关掉调试模式后恢复真实下发', () => {  const p = page();
   p.run('dg.disconnect(); S.debugMode = true; connectNow();');
   start(p);
   pose(p, 0.95);
@@ -442,4 +484,121 @@ test('关掉调试模式后恢复真实下发', () => {
   pose(p, 0.95);
   p.tick();
   assert.equal(pulses(p).length, 1);
+});
+
+// ============================================================ 蓝牙直连（郊狼 V3）
+
+/** 把链路切到蓝牙并完成假连接。 */
+async function connectBle(p) {
+  p.run('useLink(bleLink);');
+  await p.run('bleLink.connect();');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
+test('蓝牙连上后先写 BF 软上限，再开始 100ms 推包', async () => {
+  const p = page();
+  p.run('S.max = 30; S.balFreq = 7; S.balStrength = 9;');
+  await connectBle(p);
+
+  assert.equal(p.run('bleLink.phase'), 'paired');
+  assert.equal(p.run('dg === bleLink'), true);
+  assert.equal(p.run('bleLink.devices[0].name'), '47L121000');
+  assert.equal(p.run('bleLink.battery'), 88);
+
+  const bf = p.bleWrites[0];
+  assert.equal(bf[0], 0xbf, '第一条必须是 BF');
+  assert.equal(bf.length, 7);
+  assert.deepEqual(bf.slice(1), [30, 30, 7, 7, 9, 9], 'A/B 软上限 + A/B 频率平衡 + A/B 强度平衡');
+
+  const b0 = p.bleWrites[1];
+  assert.equal(b0[0], 0xb0, '接着要开始推 B0');
+  assert.equal(b0.length, 20);
+});
+
+test('B0 包按官方字节布局：强度绝对设定 + 波形 4 组', async () => {
+  const p = page();
+  await connectBle(p);
+  p.bleWrites.length = 0;
+
+  p.run('bleLink.setIntensity(12, 0);');
+  p.run("bleLink.pulse(['0A0A0A0A000A141E'], 100, 0);");
+  p.run('bleLink.pump();');
+
+  const b0 = p.bleWrites.at(-1);
+  assert.equal(b0[0], 0xb0);
+  // 序列号 0；A 模式 = 11（绝对设定），B 模式 = 00（不改变）
+  assert.equal(b0[1], 0b00001100);
+  assert.equal(b0[2], 12, 'A 通道强度设定值');
+  assert.equal(b0[3], 0, 'B 通道不改时设定值无效');
+  assert.deepEqual(b0.slice(4, 8), [0x0a, 0x0a, 0x0a, 0x0a], 'A 波形频率');
+  assert.deepEqual(b0.slice(8, 12), [0x00, 0x0a, 0x14, 0x1e], 'A 波形强度');
+  // B 通道没波形 → 填无效数据（强度 101），主机会整段丢弃，这一路不输出
+  assert.deepEqual(b0.slice(12, 20), [0, 0, 0, 0, 0, 0, 0, 101]);
+});
+
+test('急停立刻发一包双路绝对归零，并清空波形队列', async () => {
+  const p = page();
+  await connectBle(p);
+  p.run('bleLink.setIntensity(15, 0); bleLink.setIntensity(9, 1); bleLink.pump();');
+  p.run("bleLink.pulse(['0A0A0A0A64646464'], 100, 0);");
+  p.bleWrites.length = 0;
+
+  p.run('bleLink.emergency();');
+
+  const b0 = p.bleWrites.at(-1);
+  assert.equal(b0[1], 0b00001111, 'A/B 都用绝对设定');
+  assert.equal(b0[2], 0);
+  assert.equal(b0[3], 0);
+  assert.deepEqual(b0.slice(4, 12), [0, 0, 0, 0, 0, 0, 0, 101], '波形已清');
+  assert.equal(p.run('bleLink.waveQueue[0].length'), 0);
+});
+
+test('B1 回读更新强度，并把不一致标记回去重推', async () => {
+  const p = page();
+  await connectBle(p);
+  p.run('bleLink.setIntensity(10, 0); bleLink.setIntensity(10, 1); bleLink.pump();');
+  assert.deepEqual(Array.from(p.run('Array.from(bleLink.sent)')), [10, 10]);
+
+  p.notify([0xb1, 0, 3, 4]);
+  assert.deepEqual(Array.from(p.run('Array.from(bleLink.intensity)')), [3, 4]);
+  assert.deepEqual(Array.from(p.run('Array.from(bleLink.sent)')), [-1, -1], '下一包要用绝对值压回应用的值');
+});
+
+test('断开蓝牙后停止推包并回到未连接', async () => {
+  const p = page();
+  await connectBle(p);
+  assert.notEqual(p.run('bleLink.pumpTimer'), null);
+
+  p.run('bleLink.disconnect();');
+  assert.equal(p.run('bleLink.phase'), 'idle');
+  assert.equal(p.run('bleLink.pumpTimer'), null);
+  assert.deepEqual(Array.from(p.run('Array.from(bleLink.intensity)')), [0, 0]);
+
+  const count = p.bleWrites.length;
+  p.tick();
+  assert.equal(p.bleWrites.length, count, '断了就不该再发包');
+});
+
+test('调试模式优先于蓝牙，不会碰真实蓝牙', async () => {
+  const p = page();
+  p.run('S.debugMode = true; S.linkMode = "ble"; connectNow();');
+  assert.equal(p.run('dg === relayLink'), true);
+  assert.equal(p.run('dg.debugMode'), true);
+  assert.equal(p.bleWrites.length, 0);
+});
+
+test('蓝牙模式下判定链路照常工作', async () => {
+  const p = page();
+  p.run('S.linkMode = "ble";');
+  await connectBle(p);
+  p.bleWrites.length = 0;
+
+  start(p);
+  pose(p, 0.95);
+  p.tick();
+
+  const b0 = p.bleWrites.filter((w) => w[0] === 0xb0).at(-1);
+  assert.ok(b0, '应该往蓝牙发 B0');
+  assert.equal(b0[2], 5, '惩罚强度走的是 A 通道绝对设定');
+  assert.notDeepEqual(b0.slice(8, 12), [0, 0, 0, 101], 'A 通道要有波形');
 });
