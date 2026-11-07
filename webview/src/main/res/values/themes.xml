@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色底 + 无标题栏，进去就是网页 -->
+    <style name="Theme.CoyoteShell" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#08090B</item>
+        <item name="android:statusBarColor">#0E1013</item>
+        <item name="android:navigationBarColor">#0E1013</item>
+    </style>
+</resources>

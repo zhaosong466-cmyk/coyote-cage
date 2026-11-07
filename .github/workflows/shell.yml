@@ -1,0 +1,38 @@
+name: build-shell
+
+# 「手机壳」APK：只有一个 WebView，加载线上网页。
+# 网页更新后手机端不用重新发版，所以这个 workflow 平时不用动。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'webview/**'
+      - 'gradle/**'
+      - '*.kts'
+      - '.github/workflows/shell.yml'
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build shell APK
+        run: gradle :webview:assembleDebug --no-daemon --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coyote-cage-shell-apk
+          path: webview/build/outputs/apk/debug/*.apk

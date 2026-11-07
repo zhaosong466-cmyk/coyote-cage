@@ -30,3 +30,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "CoyoteCage"
 include(":app")
+// 手机壳：只有一个 WebView，加载线上网页；网页更新后手机端不用重新发版
+include(":webview")
