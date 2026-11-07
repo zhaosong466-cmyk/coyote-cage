@@ -152,6 +152,7 @@ app/src/main/java/dev/coyotecage/
     └── Colors.kt
 
 web/index.html               网页版（单文件，MediaPipe Tasks JS）
+webview/                     手机壳 APK：一个 WebView 加载线上网页，改网页即可同步到手机
 ```
 
 ## 9. 已知限制
@@ -197,6 +198,20 @@ python -m http.server 8765 --bind 127.0.0.1 --directory coyote-cage/web
 - CDN 不通时，把模型下到 `web/models/pose_landmarker_lite.task`，页面会自动回退到本地这份。
 - 二维码库加载失败时会退化成「复制配对链接」，在跑外设 App 的手机上打开那条链接也能直接拉起 APP。
 - iOS Safari 的 wasm/WebGL 支持一般，建议 Chrome / Edge。
+
+### 手机壳 APK（只做外壳，改网页即同步）
+
+`webview/` 是一个**极简安卓外壳**：整个 App 就是一个 WebView，打开后直接加载上面的 GitHub Pages 地址。
+它不是原生实现，也**不参与判定**——网页一更新，手机上打开就是新版，不用重新发 APK。
+
+- 包名 `dev.coyotecage.shell`，可以和原来的 `dev.coyotecage` 同时安装，互不影响。
+- 只申请 `INTERNET` 和 `CAMERA` 两个权限；`WebChromeClient` 只放行摄像头，其余请求一律拒绝。
+- 站内链接留在 App 里，外部链接交给系统浏览器。
+- **自己的版本号是 `1145.14.191810`（versionCode 1145），跟网页端版本号无关**，两者不要混淆。
+- 构建：`gradle :webview:assembleDebug`，或者直接看 Actions 里的 `build-shell` 产物。
+
+> 已知限制：安卓 WebView 没有实现 Web Bluetooth，所以在壳里**只能用中继连接**，切到「蓝牙直连」会提示浏览器不支持。
+> 要用蓝牙直连请直接用手机 Chrome 打开网页。
 
 ### 部署到 GitHub Pages（手机上用 https 访问）
 
