@@ -41,10 +41,6 @@
   .key.ghost{background:transparent}
   .key.sm{padding:7px 12px;font-size:12px}
   .key.primary{background:var(--bone);border-color:var(--bone);color:#0A0B0C;font-weight:600}
-  /* 运行中「开始」变「停止」：只描边，避免和急停抢红色 */
-  .key.primary.danger{background:transparent;border-color:var(--line-2);color:var(--bone)}
-  .key.stop{flex:0 0 auto;background:var(--signal);border-color:var(--signal);
-    color:#fff;font-weight:600}
 
   /* ---------------- 取景器 ---------------- */
   .stage{position:relative;flex:1;min-height:0;background:#000;overflow:hidden}
@@ -67,11 +63,23 @@
     font:11px/1.35 ui-monospace,Consolas,monospace;letter-spacing:.06em;
     text-shadow:0 1px 3px rgba(0,0,0,.9)}
   .hud-tl{top:16px;left:22px}
-  .hud-bl{bottom:16px;left:22px;max-width:calc(100% - 44px);flex-wrap:wrap}
+  .hud-bl{bottom:16px;left:22px;max-width:calc(100% - 160px);flex-wrap:wrap}
   .hud .lbl{font-size:9px;letter-spacing:.24em;color:rgba(233,230,222,.42)}
   #phase{color:var(--bone);font-weight:600}
   #meter{color:var(--dim)}
   #meter b{color:var(--amber);font-weight:600}
+
+  /* 限时倒计时：右下角常驻，点开可以加时或取消 */
+  #btnTimer{position:absolute;right:22px;bottom:16px;appearance:none;cursor:pointer;
+    padding:5px 9px;border:1px solid var(--line);border-radius:2px;
+    background:rgba(8,9,11,.6);color:var(--dim);
+    font:11px/1.2 ui-monospace,Consolas,monospace;letter-spacing:.06em;
+    text-shadow:0 1px 3px rgba(0,0,0,.9)}
+  #btnTimer:hover{border-color:var(--line-2);color:var(--bone)}
+  #btnTimer b{color:var(--amber);font-weight:600}
+  #timerMenu{position:absolute;right:22px;bottom:52px;z-index:5;display:flex;gap:8px;
+    padding:8px;border:1px solid var(--line-2);border-radius:2px;
+    background:rgba(14,16,19,.96);box-shadow:0 10px 30px rgba(0,0,0,.6)}
 
   .hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none;
     max-width:86%;padding:10px 14px;border:1px solid var(--line);border-radius:2px;
@@ -84,11 +92,9 @@
     background:var(--panel);border-top:1px solid var(--line)}
   .strip .key{flex:1 1 0;max-width:170px}
   .strip .key.primary{flex:1.4 1 0;max-width:200px}
-  .strip .key.stop{flex:0 0 110px;max-width:110px}
   @media (max-width:520px){
     .key{padding:11px 8px;font-size:12px}
     .strip .key.primary{flex:1.3 1 0;max-width:none}
-    .strip .key.stop{flex:0 0 76px}
   }
 
   /* ---------------- 面板 ---------------- */
@@ -125,6 +131,7 @@
   .chips button{padding:7px 12px;border-radius:2px;border:1px solid var(--line);
     background:transparent;color:var(--bone);font:500 12px/1 inherit;cursor:pointer}
   .chips button:hover{border-color:var(--line-2)}
+  .chips button.on{background:var(--bone);border-color:var(--bone);color:#0A0B0C;font-weight:600}
   .err{margin-top:6px;color:var(--signal);font-size:11px}
   .actions{display:flex;gap:10px;margin-top:22px}
   .actions .key{flex:1}
@@ -152,6 +159,11 @@
     <div class="brackets" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
     <div class="hud hud-tl"><span class="lbl">STATE</span><span id="phase">未开始</span></div>
     <div class="hud hud-bl" id="meter"></div>
+    <button id="btnTimer" class="hidden">剩余 <b>00:00</b></button>
+    <div id="timerMenu" class="hidden">
+      <button class="key sm" id="btnPlus5">+5 分钟</button>
+      <button class="key sm" id="btnNoLimit">取消限时</button>
+    </div>
     <div class="hint" id="hint">正在启动摄像头…</div>
   </div>
 
@@ -160,7 +172,6 @@
     <button id="btnSel" class="key">框选</button>
     <button id="btnCam" class="key">镜头</button>
     <button id="btnSet" class="key">设置</button>
-    <button id="btnStop" class="key stop" title="清空波形并归零">急停</button>
   </footer>
 </div>
 
@@ -205,8 +216,20 @@
           <label class="field">检测部位
             <select id="selPoint">
               <option value="torso">躯干（双肩 + 双髋）</option>
+              <option value="low">低姿态（跪 / 坐）</option>
               <option value="full">全身</option>
               <option value="feet">双脚</option>
+            </select></label>
+          <label class="field">判定方式
+            <select id="selJudge">
+              <option value="points">逐点判定</option>
+              <option value="bbox">包围盒判定</option>
+            </select></label>
+          <label class="field">姿态丢失时
+            <select id="selLost">
+              <option value="violate">视为越界</option>
+              <option value="pause">暂停判定</option>
+              <option value="ignore">保持上次判定</option>
             </select></label>
           <label class="field">框模式
             <select id="selFrame">
@@ -222,6 +245,37 @@
             <input type="range" id="rRandom" min="5" max="60" step="1" /></label>
           <label class="field hidden" id="rowPose"><span class="line"><span>姿势容差 (% 画面高度)</span><output id="oPoseTol"></output></span>
             <input type="range" id="rPoseTol" min="1" max="12" step="1" /></label>
+        </div>
+      </section>
+
+      <section>
+        <h3>会话</h3>
+        <div class="fields">
+          <label class="field"><span class="line"><span>限时 (分钟，0 = 不限)</span><output id="oSession"></output></span>
+            <input type="range" id="rSession" min="0" max="120" step="5" /></label>
+          <label class="checkline">开始前询问时长 <input type="checkbox" id="cAsk" /></label>
+        </div>
+      </section>
+
+      <section>
+        <h3>挑逗</h3>
+        <div class="fields">
+          <label class="checkline">启用挑逗 <input type="checkbox" id="cTease" /></label>
+        </div>
+        <div class="fields hidden" id="rowTease">
+          <label class="field"><span class="line"><span>最短间隔 (秒)</span><output id="oTeaseMin"></output></span>
+            <input type="range" id="rTeaseMin" min="5" max="120" step="1" /></label>
+          <label class="field"><span class="line"><span>最长间隔 (秒)</span><output id="oTeaseMax"></output></span>
+            <input type="range" id="rTeaseMax" min="5" max="120" step="1" /></label>
+          <label class="field"><span class="line"><span>强度 (基础强度的 %)</span><output id="oTeasePct"></output></span>
+            <input type="range" id="rTeasePct" min="10" max="100" step="5" /></label>
+          <label class="field"><span class="line"><span>持续 (ms)</span><output id="oTeaseMs"></output></span>
+            <input type="range" id="rTeaseMs" min="200" max="800" step="100" /></label>
+          <label class="field">挑逗波形
+            <select id="selTeaseWave"></select></label>
+        </div>
+        <div class="actions hidden" id="rowTeaseTest">
+          <button id="btnTeaseTest" class="key">试一次挑逗</button>
         </div>
       </section>
 
@@ -243,6 +297,24 @@
 
       <div class="actions">
         <button id="btnTest" class="key">用当前强度试一次</button>
+      </div>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="dlgDur">
+  <div class="sheet">
+    <header class="sheet-head">
+      <h2>本次时长</h2>
+      <button id="btnCloseDur" class="key ghost sm">取消</button>
+    </header>
+    <div class="sheet-body">
+      <section style="padding-top:10px">
+        <div class="chips" id="durChips"></div>
+        <label class="checkline">下次不再询问 <input type="checkbox" id="cNoAsk" /></label>
+      </section>
+      <div class="actions">
+        <button id="btnDurStart" class="key primary">开始</button>
       </div>
     </div>
   </div>
@@ -293,9 +365,16 @@ const CONNECTIONS = [
 
 const POINT_SETS = {
   torso: [11, 12, 23, 24],
+  // 低姿态：跪、坐、土下坐时下肢看不见，这 9 点仍然稳定
+  low: [0, 11, 12, 13, 14, 15, 16, 23, 24],
   full: [0, 11, 12, 15, 16, 23, 24, 25, 26, 27, 28],
   feet: [27, 28],
 };
+
+/** 关键点可见度下限：低于它的点不参与判定。0.3 是为了让跪坐姿态也能判。 */
+const VIS_MIN = 0.3;
+/** 姿态帧龄超过它就算「丢了」。 */
+const POSE_STALE_MS = 900;
 
 const PRESETS = {
   '轻叩': '0A0A0A0A32323232\n0A0A0A0A00000000',
@@ -307,7 +386,14 @@ const DEFAULTS = {
   base: 5, max: 25, step: 2, escalate: true, everySec: 5,
   shockMs: 600, gapMs: 1500, graceMs: 400,
   pointSet: 'torso', channel: 0,
+  // points = 逐点判定；bbox = 用可见点外接框的中心判定
+  judgeMode: 'points',
+  // 姿态丢失：violate = 视为越界 / pause = 暂停判定 / ignore = 保持上次
+  poseLost: 'violate',
   frameMode: 'manual', randomEverySec: 15, prepareSec: 3, poseTolerance: 3,
+  sessionMinutes: 0, askDuration: true,
+  tease: false, teaseMinSec: 20, teaseMaxSec: 60, teasePercent: 40, teaseMs: 300,
+  teaseWaveform: '',
   waveform: PRESETS['轻叩'],
   relay: 'wss://trex.dungeon-lab.cn/v4',
 };
@@ -325,7 +411,18 @@ let pose = null;
 let latest = null;
 let lastDetect = 0;
 
-let running = false;
+/** 会话状态：没有独立急停键，关闭走的也是「归零 + 清队列」的同一条路径。 */
+const Session = { IDLE: 'idle', PREPARING: 'preparing', RUNNING: 'running', ENDED: 'ended' };
+let state = Session.IDLE;
+let endReason = '';
+
+/** 本次会话累计的「有效监守时长」，姿态不新鲜时冻结。 */
+let sessionActiveMs = 0;
+let limitMs = 0;
+
+/** 开局是否已经检到过可用姿态；没有就不按「姿态丢失」开罚。 */
+let seenPose = false;
+
 let outsideMs = 0;
 let lastShockAt = 0;
 let wasViolating = false;
@@ -338,6 +435,10 @@ let referencePose = null;
 let nextRandomAt = 0;
 let lastQuadrant = -1;
 
+// 挑逗
+let nextTeaseAt = 0;
+let teaseTimer = null;
+
 let selecting = false;
 let dragStart = null;
 let dragNow = null;
@@ -348,6 +449,8 @@ const video = $('video');
 const overlay = $('overlay');
 const ctx = overlay.getContext('2d');
 const hint = $('hint');
+
+const isLive = () => state === Session.RUNNING || state === Session.PREPARING;
 
 // ============================================================ 设置持久化
 
@@ -413,11 +516,16 @@ function parseFrames(text) {
   return lines.map((l) => l.toUpperCase());
 }
 
-function buildFrames() {
-  const pattern = parseFrames(S.waveform);
+/** 把波形模板铺满 [ms]，一帧 100ms。 */
+function buildFramesFor(text, ms) {
+  const pattern = parseFrames(text);
   if (!pattern) return null;
-  const count = Math.max(1, Math.floor(S.shockMs / 100));
+  const count = Math.max(1, Math.ceil(ms / 100));
   return Array.from({ length: count }, (_, i) => pattern[i % pattern.length]);
+}
+
+function buildFrames() {
+  return buildFramesFor(S.waveform, S.shockMs);
 }
 
 function targetFor(ms) {
@@ -425,6 +533,32 @@ function targetFor(ms) {
   if (!S.escalate) return base;
   const steps = Math.floor(ms / 1000 / Math.max(1, S.everySec));
   return Math.min(base + steps * S.step, S.max);
+}
+
+/** 挑逗强度：基础强度的百分比，永远被强度上限夹住。 */
+function teaseTarget() {
+  const base = Math.min(Math.max(S.base, 1), Math.max(S.max, 1));
+  return Math.max(1, Math.min(Math.max(S.max, 1), Math.round((base * S.teasePercent) / 100)));
+}
+
+/** 下一次挑逗的间隔（毫秒），在 [min, max] 之间随机。 */
+function teaseInterval() {
+  const lo = Math.max(1, Math.min(S.teaseMinSec, S.teaseMaxSec));
+  const hi = Math.max(lo, S.teaseMaxSec);
+  return (lo + Math.random() * (hi - lo)) * 1000;
+}
+
+function fmtClock(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const mm = String(Math.floor(total / 60)).padStart(2, '0');
+  const ss = String(total % 60).padStart(2, '0');
+  return mm + ':' + ss;
+}
+
+function setPhase(text, color) {
+  const el = $('phase');
+  el.textContent = text;
+  el.style.color = color;
 }
 
 function setHint(text, visible = true) {
@@ -700,10 +834,48 @@ async function loadTasks() {
   }
 }
 
-function handlePoseResult(result) {
-  if (result && result.landmarks && result.landmarks.length) {
-    latest = { points: result.landmarks[0], ts: performance.now() };
+// ---- 关键点中值滤波：按时间窗（不是帧数），30fps 和 10fps 行为一致 ----
+const FILTER_WINDOW_MS = 300;
+const FILTER_MAX_FRAMES = 9;
+let poseBuffer = [];
+
+function median(values) {
+  if (!values.length) return null;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/** 每个坐标取时间窗内的中位数；可见度取最新帧原值，避免把掉线抹平。 */
+function smoothPoints(buffer, latestPoints) {
+  const out = new Array(latestPoints.length);
+  for (let i = 0; i < latestPoints.length; i++) {
+    const xs = [];
+    const ys = [];
+    for (const frame of buffer) {
+      const p = frame.points[i];
+      if (!p) continue;
+      xs.push(p.x);
+      ys.push(p.y);
+    }
+    const last = latestPoints[i] || { x: 0, y: 0, visibility: 0 };
+    out[i] = {
+      x: median(xs) ?? last.x,
+      y: median(ys) ?? last.y,
+      visibility: last.visibility,
+    };
   }
+  return out;
+}
+
+function handlePoseResult(result) {
+  if (!result || !result.landmarks || !result.landmarks.length) return;
+  const now = performance.now();
+  const raw = result.landmarks[0];
+  poseBuffer.push({ ts: now, points: raw });
+  while (poseBuffer.length && now - poseBuffer[0].ts > FILTER_WINDOW_MS) poseBuffer.shift();
+  if (poseBuffer.length > FILTER_MAX_FRAMES) poseBuffer.splice(0, poseBuffer.length - FILTER_MAX_FRAMES);
+  latest = { points: smoothPoints(poseBuffer, raw), ts: now };
 }
 
 async function startPose() {
@@ -716,7 +888,7 @@ async function startPose() {
     numPoses: 1,
     minPoseDetectionConfidence: 0.5,
     minPosePresenceConfidence: 0.5,
-    minTrackingConfidence: 0.5,
+    minTrackingConfidence: 0.35,
     resultCallback: handlePoseResult,
   });
 
@@ -774,7 +946,7 @@ function draw() {
   ctx.clearRect(0, 0, w, h);
 
   // 越界：整屏信号色细框 + 四角加粗
-  if (running && violating) {
+  if (isLive() && violating) {
     ctx.strokeStyle = 'rgba(255,75,31,.5)';
     ctx.lineWidth = 2;
     ctx.strokeRect(1, 1, w - 2, h - 2);
@@ -812,7 +984,7 @@ function draw() {
   const pts = latest ? latest.points : [];
   if (pts.length) {
     const px = pts.map((p) => {
-      if (!p || (p.visibility !== undefined && p.visibility < 0.4)) return null;
+      if (!p || (p.visibility !== undefined && p.visibility < VIS_MIN)) return null;
       const d = toDisplay(p);
       const inside = showBox
         ? (d.x >= roi.l && d.x <= roi.r && d.y >= roi.t && d.y <= roi.b)
@@ -873,14 +1045,45 @@ function draw() {
 
 // ============================================================ 判定 + 惩罚
 
-function isOutside(points) {
+/** 取当前判定部位里可见的点（显示坐标系）。 */
+function visiblePoints(points) {
   const indices = POINT_SETS[S.pointSet] || POINT_SETS.torso;
+  const out = [];
   for (const i of indices) {
     const p = points[i];
     if (!p) continue;
-    if (p.visibility !== undefined && p.visibility < 0.4) continue;
+    if ((p.visibility ?? 1) < VIS_MIN) continue;
     const d = toDisplay(p);
-    if (d.x < roi.l || d.x > roi.r || d.y < roi.t || d.y > roi.b) return true;
+    if (!Number.isFinite(d.x) || !Number.isFinite(d.y)) continue;
+    out.push(d);
+  }
+  return out;
+}
+
+/**
+ * 是否越界。返回 null 表示「这一帧不可判」（可见点太少），交给姿态丢失策略。
+ * bbox 模式：可见点外接框的中心出框即越界。
+ */
+function isOutside(points) {
+  const pts = visiblePoints(points);
+
+  if (S.judgeMode === 'bbox') {
+    if (pts.length < 2) return null;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of pts) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    return cx < roi.l || cx > roi.r || cy < roi.t || cy > roi.b;
+  }
+
+  if (!pts.length) return null;
+  for (const p of pts) {
+    if (p.x < roi.l || p.x > roi.r || p.y < roi.t || p.y > roi.b) return true;
   }
   return false;
 }
@@ -896,7 +1099,7 @@ function maxDeviation(reference, current) {
     const base = reference[i];
     const now = current[i];
     if (!base || !now) continue;
-    if ((base.visibility ?? 1) < 0.4 || (now.visibility ?? 1) < 0.4) continue;
+    if ((base.visibility ?? 1) < VIS_MIN || (now.visibility ?? 1) < VIS_MIN) continue;
     const dx = (base.x - now.x) * vw;
     const dy = (base.y - now.y) * vh;
     const d = Math.hypot(dx, dy) / vh;
@@ -913,7 +1116,7 @@ function usablePose(points) {
   for (const i of indices) {
     const p = points[i];
     if (!p) continue;
-    if ((p.visibility ?? 1) >= 0.4) visible++;
+    if ((p.visibility ?? 1) >= VIS_MIN) visible++;
   }
   return visible >= 2;
 }
@@ -963,40 +1166,144 @@ function cancelTest() {
   testTimer = null;
 }
 
-function stopOutput() {
-  running = false;
+function cancelTease() {
+  if (teaseTimer !== null) clearTimeout(teaseTimer);
+  teaseTimer = null;
+}
+
+/** 一次挑逗：抬到挑逗强度 → 打一记短波形 → 归零。 */
+function runTease() {
+  const text = S.teaseWaveform || S.waveform;
+  const frames = buildFramesFor(text, S.teaseMs);
+  if (!frames) return;
+  release();
+  outputChannel = S.channel;
+  dg.setIntensity(teaseTarget(), S.channel);
+  dg.pulse(frames, S.teaseMs, S.channel);
+  teaseTimer = setTimeout(() => {
+    teaseTimer = null;
+    release();
+  }, S.teaseMs + 150);
+}
+
+function paintTimer() {
+  const btn = $('btnTimer');
+  if (limitMs <= 0) {
+    btn.classList.add('hidden');
+    $('timerMenu').classList.add('hidden');
+    return;
+  }
+  btn.classList.remove('hidden');
+  btn.innerHTML = '剩余 <b>' + fmtClock(limitMs - sessionActiveMs) + '</b>';
+}
+
+function syncRunButton() {
+  // 单一开关：运行中也是实心主按钮，关闭是唯一出口，不能看起来像禁用
+  $('btnRun').textContent = isLive() ? '关闭' : '开始';
+}
+
+function startSession() {
+  if (dg.phase !== 'paired' || isLive()) return;
+  cancelTest();
+  cancelTease();
+  release();
+
+  const now = performance.now();
+  const prepMs = Math.max(0, S.prepareSec) * 1000;
+
+  outsideMs = 0;
+  lastShockAt = 0;
+  wasViolating = false;
+  violating = false;
+  referencePose = null;
+  seenPose = false;
+  sessionActiveMs = 0;
+  limitMs = Math.max(0, S.sessionMinutes) * 60000;
+  endReason = '';
+
+  prepareEndsAt = now + prepMs;
+  prepareRemaining = prepMs;
+  state = prepMs > 0 ? Session.PREPARING : Session.RUNNING;
+
+  nextTeaseAt = now + teaseInterval();
+
+  if (S.frameMode === 'random') {
+    const next = randomRect(lastQuadrant, Math.random);
+    lastQuadrant = next.quadrant;
+    roi = next.rect;
+    nextRandomAt = now + Math.max(5, S.randomEverySec) * 1000;
+  }
+
+  stage.classList.toggle('live', true);
+  $('timerMenu').classList.add('hidden');
+  syncRunButton();
+  setPhase(state === Session.PREPARING ? '准备中' : '监守中', state === Session.PREPARING ? '#F2B33D' : '#6FE3A4');
+  $('meter').innerHTML = '';
+  paintTimer();
+  renderStatus();
+}
+
+/**
+ * 结束会话。关闭、倒计时到点、连接中断都走这里。
+ * 输出侧永远是 release() → 两路归零 + 清队列，和原急停同一条路径。
+ */
+function endSession(reason = 'stopped') {
+  if (!isLive()) return;
+  state = Session.ENDED;
+  endReason = reason;
   outsideMs = 0;
   violating = false;
   wasViolating = false;
   prepareEndsAt = 0;
   prepareRemaining = 0;
   referencePose = null;
-  stage.classList.toggle('live', false);
+  seenPose = false;
+  sessionActiveMs = 0;
+  limitMs = 0;
   cancelTest();
+  cancelTease();
+  stage.classList.toggle('live', false);
   release();
-  $('btnRun').textContent = '开始';
-  $('btnRun').classList.remove('danger');
+  $('meter').innerHTML = '';
+  $('timerMenu').classList.add('hidden');
+  paintTimer();
+  setPhase(
+    reason === 'timeout' ? '时间到' : reason === 'disconnected' ? '连接中断' : '已结束',
+    reason === 'disconnected' ? '#FF4B1F' : '#8B9099',
+  );
+  syncRunButton();
   renderStatus();
 }
 
 setInterval(() => {
-  if (!running) return;
+  if (!isLive()) return;
   const now = performance.now();
   const f = latest;
-  const fresh = !!f && now - f.ts < 900 && f.points && f.points.length > 0;
+  const fresh = !!f && now - f.ts < POSE_STALE_MS && f.points && f.points.length > 0;
+  const usable = fresh && usablePose(f.points);
+  if (usable) seenPose = true;
 
   // 开局准备倒计时：只走界面，不判定
-  if (prepareEndsAt > now) {
-    prepareRemaining = prepareEndsAt - now;
-    outsideMs = 0;
-    wasViolating = false;
-    violating = false;
-    $('meter').innerHTML = `倒计时 <b>${Math.ceil(prepareRemaining / 1000)}</b>s`;
-    $('phase').textContent = '准备中';
-    $('phase').style.color = '#F2B33D';
+  if (state === Session.PREPARING) {
+    prepareRemaining = Math.max(0, prepareEndsAt - now);
+    if (prepareRemaining > 0) {
+      outsideMs = 0;
+      wasViolating = false;
+      violating = false;
+      $('meter').innerHTML = `倒计时 <b>${Math.ceil(prepareRemaining / 1000)}</b>s`;
+      setPhase('准备中', '#F2B33D');
+      return;
+    }
+    prepareRemaining = 0;
+    state = Session.RUNNING;
+  }
+
+  // 有效时长只在姿态新鲜时累加：人离开画面 / 切后台，计时冻结
+  if (usable) sessionActiveMs += 60;
+  if (limitMs > 0 && sessionActiveMs >= limitMs) {
+    endSession('timeout');
     return;
   }
-  prepareRemaining = 0;
 
   // 随机框到点换位置
   if (S.frameMode === 'random' && now >= nextRandomAt) {
@@ -1008,19 +1315,37 @@ setInterval(() => {
 
   let out = false;
   let deviation = 0;
+  let unjudgeable = false;
 
   if (S.frameMode === 'pose') {
     if (!referencePose) {
-      // 倒计时结束，抓第一帧可用姿态当基准
-      if (fresh && usablePose(f.points)) {
+      // 倒计时结束，抓第一帧可用姿态当基准；抓到的这一帧不算越界
+      if (usable) {
         referencePose = f.points.map((p) => ({ x: p.x, y: p.y, visibility: p.visibility }));
+        out = false;
+      } else {
+        unjudgeable = true;
       }
-    } else if (fresh) {
+    } else if (usable) {
       deviation = maxDeviation(referencePose, f.points);
-      out = deviation >= 0 && deviation > S.poseTolerance / 100;
+      if (deviation < 0) unjudgeable = true;
+      else out = deviation > S.poseTolerance / 100;
+    } else {
+      unjudgeable = true;
     }
+  } else if (!usable) {
+    unjudgeable = true;
   } else {
-    out = fresh && isOutside(f.points);
+    const r = isOutside(f.points);
+    if (r === null) unjudgeable = true;
+    else out = r;
+  }
+
+  // 姿态丢失策略。开局还没见过人时不罚，避免刚点开始就凭空挨一下。
+  if (unjudgeable) {
+    if (!seenPose || S.poseLost === 'pause') out = false;
+    else if (S.poseLost === 'ignore') out = wasViolating;
+    else out = true;
   }
 
   // 随机框和姿势锁定都没有容忍时间
@@ -1031,11 +1356,23 @@ setInterval(() => {
 
   if (violating && now - lastShockAt >= S.shockMs + S.gapMs) {
     lastShockAt = now;
+    cancelTease();
     fire(target);
   } else if (!violating && wasViolating) {
     release();
   }
   wasViolating = violating;
+
+  // 挑逗：只在监守且未越界时触发；越界中直接跳过一次，不补发也不顺延
+  if (!S.tease) {
+    cancelTease();
+  } else if (violating) {
+    cancelTease();
+    nextTeaseAt = now + teaseInterval();
+  } else if (teaseTimer === null && now >= nextTeaseAt) {
+    nextTeaseAt = now + teaseInterval();
+    runTease();
+  }
 
   if (S.frameMode === 'pose') {
     $('meter').innerHTML =
@@ -1047,8 +1384,12 @@ setInterval(() => {
   } else {
     $('meter').innerHTML = `越界 <b>${(outsideMs / 1000).toFixed(1)}</b>s · 目标强度 <b>${target}</b>`;
   }
-  $('phase').textContent = violating ? '越界中' : (fresh ? '监守中' : '没检测到人');
-  $('phase').style.color = violating ? '#FF4B1F' : (fresh ? '#6FE3A4' : '#8B9099');
+
+  if (violating) setPhase('越界中', '#FF4B1F');
+  else if (!usable) setPhase('姿态不可信', '#FF4B1F');
+  else setPhase('监守中', '#6FE3A4');
+
+  paintTimer();
 }, 60);
 
 // ============================================================ 顶部状态
@@ -1057,6 +1398,9 @@ function renderStatus() {
   const el = $('status');
   const btn = $('btnConn');
   btn.disabled = false;
+
+  // 会话中掉链：立刻收摊，不必等用户发现
+  if (isLive() && dg.phase !== 'paired') endSession('disconnected');
 
   if (dg.phase === 'idle') {
     el.textContent = '未连接';
@@ -1085,7 +1429,7 @@ function renderStatus() {
     btn.onclick = () => dg.connect(S.relay);
   }
 
-  $('btnRun').disabled = !(dg.phase === 'paired' || running);
+  $('btnRun').disabled = !(dg.phase === 'paired' || isLive());
 }
 
 dg.onchange = renderStatus;
@@ -1107,34 +1451,70 @@ $('btnSel').onclick = () => {
 };
 
 $('btnRun').onclick = () => {
-  if (running) {
-    stopOutput();
-  } else {
-    if (dg.phase !== 'paired') return;
-    cancelTest();
-    release();
-    running = true;
-    stage.classList.toggle('live', true);
-    outsideMs = 0;
-    lastShockAt = 0;
-    wasViolating = false;
-    violating = false;
-    referencePose = null;
-    prepareEndsAt = performance.now() + Math.max(0, S.prepareSec) * 1000;
-    prepareRemaining = Math.max(0, prepareEndsAt - performance.now());
-    if (S.frameMode === 'random') {
-      const next = randomRect(lastQuadrant, Math.random);
-      lastQuadrant = next.quadrant;
-      roi = next.rect;
-      nextRandomAt = performance.now() + Math.max(5, S.randomEverySec) * 1000;
-    }
+  if (isLive()) {
+    endSession('stopped');
+    return;
   }
-  $('btnRun').textContent = running ? '停止' : '开始';
-  $('btnRun').classList.toggle('danger', running);
-  renderStatus();
+  if (dg.phase !== 'paired') return;
+  if (S.askDuration) openDuration();
+  else startSession();
 };
 
-$('btnStop').onclick = stopOutput;
+// ---- 开始前的时长弹窗 ----
+const DURATION_CHOICES = [10, 20, 30, 45, 60, 0];
+let pendingMinutes = 0;
+
+function paintDurationChips() {
+  const row = $('durChips');
+  row.innerHTML = '';
+  for (const minutes of DURATION_CHOICES) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = minutes === 0 ? '不限' : minutes + ' 分钟';
+    btn.classList.toggle('on', minutes === pendingMinutes);
+    btn.onclick = () => {
+      pendingMinutes = minutes;
+      paintDurationChips();
+    };
+    row.appendChild(btn);
+  }
+}
+
+function openDuration() {
+  pendingMinutes = Math.max(0, S.sessionMinutes);
+  $('cNoAsk').checked = false;
+  paintDurationChips();
+  if (!$('dlgDur').open) $('dlgDur').showModal();
+}
+
+$('btnCloseDur').onclick = () => $('dlgDur').close();
+
+$('btnDurStart').onclick = () => {
+  S.sessionMinutes = pendingMinutes;
+  if ($('cNoAsk').checked) S.askDuration = false;
+  saveSettings();
+  $('rSession').value = S.sessionMinutes;
+  $('oSession').textContent = S.sessionMinutes;
+  $('dlgDur').close();
+  startSession();
+};
+
+$('btnPlus5').onclick = () => {
+  if (limitMs > 0) limitMs += 5 * 60000;
+  $('timerMenu').classList.add('hidden');
+  paintTimer();
+};
+
+$('btnNoLimit').onclick = () => {
+  limitMs = 0;
+  $('timerMenu').classList.add('hidden');
+  paintTimer();
+};
+
+$('btnTimer').onclick = () => {
+  if (limitMs <= 0) return;
+  $('timerMenu').classList.toggle('hidden');
+};
 
 overlay.addEventListener('pointerdown', (e) => {
   if (!selecting) return;
@@ -1208,6 +1588,15 @@ function syncFrameRows() {
   }
 }
 
+/** 挑逗参数联动：最短不能超过最长，开关决定整组是否显示。 */
+function syncTease() {
+  if (S.teaseMaxSec < S.teaseMinSec) S.teaseMaxSec = S.teaseMinSec;
+  $('rTeaseMax').value = S.teaseMaxSec;
+  $('oTeaseMax').textContent = S.teaseMaxSec;
+  $('rowTease').classList.toggle('hidden', !S.tease);
+  $('rowTeaseTest').classList.toggle('hidden', !S.tease);
+}
+
 function initSettingsUI() {
   bindRange('rBase', 'oBase', 'base');
   bindRange('rMax', 'oMax', 'max');
@@ -1219,16 +1608,50 @@ function initSettingsUI() {
   bindRange('rPrepare', 'oPrepare', 'prepareSec');
   bindRange('rRandom', 'oRandom', 'randomEverySec');
   bindRange('rPoseTol', 'oPoseTol', 'poseTolerance');
+  bindRange('rSession', 'oSession', 'sessionMinutes');
 
   const esc = $('cEsc');
   esc.checked = S.escalate;
   esc.addEventListener('change', () => { S.escalate = esc.checked; saveSettings(); });
 
+  const ask = $('cAsk');
+  ask.checked = S.askDuration;
+  ask.addEventListener('change', () => { S.askDuration = ask.checked; saveSettings(); });
+
   bindSelect('selPoint', 'pointSet');
+  bindSelect('selJudge', 'judgeMode');
+  bindSelect('selLost', 'poseLost');
   bindSelect('selChannel', 'channel', (v) => parseInt(v, 10));
   bindSelect('selFrame', 'frameMode');
   $('selFrame').addEventListener('change', syncFrameRows);
   syncFrameRows();
+
+  // ---- 挑逗 ----
+  const tease = $('cTease');
+  tease.checked = S.tease;
+  tease.addEventListener('change', () => { S.tease = tease.checked; saveSettings(); syncTease(); });
+
+  bindRange('rTeaseMin', 'oTeaseMin', 'teaseMinSec');
+  bindRange('rTeaseMax', 'oTeaseMax', 'teaseMaxSec');
+  bindRange('rTeasePct', 'oTeasePct', 'teasePercent');
+  bindRange('rTeaseMs', 'oTeaseMs', 'teaseMs');
+  $('rTeaseMin').addEventListener('input', syncTease);
+  $('rTeaseMax').addEventListener('input', syncTease);
+
+  const waveSel = $('selTeaseWave');
+  waveSel.innerHTML = '<option value="">跟随主波形</option>';
+  for (const name of Object.keys(PRESETS)) {
+    const opt = document.createElement('option');
+    opt.value = PRESETS[name];
+    opt.textContent = name;
+    waveSel.appendChild(opt);
+  }
+  waveSel.value = S.teaseWaveform;
+  waveSel.addEventListener('change', () => {
+    S.teaseWaveform = waveSel.value;
+    saveSettings();
+  });
+  syncTease();
 
   const wave = $('txtWave');
   const err = $('waveErr');
@@ -1266,10 +1689,11 @@ function initSettingsUI() {
 $('btnSet').onclick = () => { if (!$('dlgSet').open) $('dlgSet').showModal(); };
 $('btnCloseSet').onclick = () => $('dlgSet').close();
 $('btnTest').onclick = async () => {
-  if (running || testTimer !== null || dg.phase !== 'paired') return;
+  if (isLive() || testTimer !== null || dg.phase !== 'paired') return;
   const frames = buildFrames();
   if (!frames) return;
   const target = Math.min(S.base, S.max);
+  cancelTease();
   release();
   outputChannel = S.channel;
   dg.setIntensity(target, S.channel);
@@ -1278,6 +1702,11 @@ $('btnTest').onclick = async () => {
     testTimer = null;
     release();
   }, S.shockMs + 200);
+};
+
+$('btnTeaseTest').onclick = () => {
+  if (isLive() || dg.phase !== 'paired' || teaseTimer !== null) return;
+  runTease();
 };
 
 // ============================================================ 二维码
@@ -1347,7 +1776,8 @@ new ResizeObserver(resizeOverlay).observe(stage);
 async function boot() {
   initSettingsUI();
   renderStatus();
-  $('btnRun').textContent = '开始';
+  syncRunButton();
+  paintTimer();
 
   try {
     await startCamera(facing);
