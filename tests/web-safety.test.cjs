@@ -14,8 +14,10 @@ function page() {
     if (!elements.has(id)) {
       elements.set(id, {
         style: {}, open: false, value: '', textContent: '', innerHTML: '', checked: false,
+        handlers: {},
         classList: { toggle() {}, remove() {}, add() {}, contains: () => false },
-        addEventListener() {}, appendChild() {}, getContext: () => ({}),
+        addEventListener(type, fn) { this.handlers[type] = fn; },
+        appendChild() {}, getContext: () => ({}),
         showModal() { this.open = true; }, close() { this.open = false; },
       });
     }
@@ -43,9 +45,14 @@ function page() {
   run(`dg.ws = { readyState: 1, send: capture }; dg.phase = 'paired';
        dg.appId = 'app'; dg.devices = [{ slotId: 'device' }];
        S.askDuration = false;`);
+  // 面板初始化会挂上所有 input/change 监听，测试里也照做一遍
+  run('initSettingsUI();');
   return {
     html, run, sent, elements, timers,
     tick(ms = 60) { now += ms; intervals.forEach((fn) => fn()); },
+    fire(id, type) { const h = element(id).handlers[type]; if (h) h({ target: element(id) }); },
+    /** 重新挂上 WebSocket 假桩（dg.disconnect() 会把它清掉）。 */
+    attach() { run('dg.ws = { readyState: 1, send: capture };'); },
     advance(ms) {
       now += ms;
       for (const [id, timer] of [...timers]) {
@@ -364,4 +371,75 @@ test('重连后从「已结束」可以重新开始', () => {
   p.run('dg.phase = "paired";');
   p.elements.get('btnRun').onclick();
   assert.equal(p.run('state'), 'running');
+});
+
+// ============================================================ 调试模式
+
+test('打开调试模式会断开现有连接，并让「连接」连到假设备', () => {
+  const p = page();
+  start(p);
+  assert.equal(p.run('state'), 'running');
+
+  p.elements.get('cDebug').checked = true;
+  p.fire('cDebug', 'change');
+
+  assert.equal(p.run('S.debugMode'), true);
+  assert.equal(p.run('dg.phase'), 'idle');
+  assert.equal(p.run('state'), 'ended', '切换模式时正在跑的会话要收摊');
+
+  p.run('connectNow()');
+  assert.equal(p.run('dg.debugMode'), true);
+  assert.equal(p.run('dg.phase'), 'paired');
+  assert.equal(p.run('dg.devices[0].name'), '调试设备');
+
+  const before = p.sent.length;
+  p.run('connectNow()');
+  p.run('dg.emergency();');
+  assert.equal(p.sent.length, before, '调试模式不建立任何网络连接');
+});
+
+test('调试模式下判定照跑，但指令只进日志不发送', () => {
+  const p = page();
+  p.run('dg.disconnect(); S.debugMode = true; connectNow();');
+  const before = p.sent.length;
+
+  start(p);
+  pose(p, 0.95);
+  p.tick();
+
+  assert.equal(p.sent.length, before, '不能有任何真实下发');
+  assert.equal(p.run('dg.intensity[0]'), 5, '本地强度仍要更新');
+  assert.ok(p.run('dg.debugLog.some(e => e.text.startsWith("波形 A"))'), '要记录波形');
+});
+
+test('调试日志能读懂归零和清队列', () => {
+  const p = page();
+  p.run('dg.disconnect(); S.debugMode = true; connectNow();');
+  p.run('dg.emergency();');
+  const texts = Array.from(p.run('dg.debugLog.map(e => e.text)'));
+  assert.deepEqual(texts.slice(-3), ['归零 A', '归零 B', '清空 A 通道波形']);
+  assert.equal(p.sent.length, 0);
+});
+
+test('关掉调试模式后恢复真实下发', () => {
+  const p = page();
+  p.run('dg.disconnect(); S.debugMode = true; connectNow();');
+  start(p);
+  pose(p, 0.95);
+  p.tick();
+  assert.equal(p.sent.length, 0);
+
+  p.elements.get('cDebug').checked = false;
+  p.fire('cDebug', 'change');
+  assert.equal(p.run('S.debugMode'), false);
+  assert.equal(p.run('dg.debugMode'), false);
+  assert.equal(p.run('dg.debugLog.length'), 0);
+
+  // 重新接上真实中继（测试里直接摆成已配对态）
+  p.attach();
+  p.run(`dg.phase = 'paired'; dg.appId = 'app'; dg.devices = [{ slotId: 'device' }];`);
+  start(p);
+  pose(p, 0.95);
+  p.tick();
+  assert.equal(pulses(p).length, 1);
 });

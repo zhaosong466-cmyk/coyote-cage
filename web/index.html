@@ -136,8 +136,13 @@
   .actions{display:flex;gap:10px;margin-top:22px}
   .actions .key{flex:1}
 
-  #qrBox{display:flex;flex-direction:column;align-items:center;gap:12px;padding-top:8px}
-  #qrHolder{width:232px;height:232px;background:#fff;display:flex;
+  /* 调试输出：只在不连设备时用 */
+  #debugLog{max-height:190px;overflow:auto;padding:9px 10px;border-radius:2px;
+    border:1px solid var(--line);background:#0A0C0E;
+    font:10px/1.6 ui-monospace,Consolas,monospace;color:#C9CDD3;white-space:pre-wrap}
+  #debugLog .empty{color:var(--dim)}
+
+  #qrBox{display:flex;flex-direction:column;align-items:center;gap:12px;padding-top:8px}  #qrHolder{width:232px;height:232px;background:#fff;display:flex;
     align-items:center;justify-content:center;overflow:hidden}
   #pairUrl{text-align:center;word-break:break-all;color:var(--dim);
     font:10px/1.4 ui-monospace,Consolas,monospace}
@@ -290,9 +295,15 @@
       <section>
         <h3>连接</h3>
         <div class="fields">
+          <label class="checkline">调试模式（不连设备，只记录输出） <input type="checkbox" id="cDebug" /></label>
           <label class="field">中继地址
             <input type="text" id="txtRelay" spellcheck="false" /></label>
         </div>
+      </section>
+
+      <section id="rowDebug" class="hidden">
+        <h3>调试输出</h3>
+        <div id="debugLog"></div>
       </section>
 
       <div class="actions">
@@ -396,6 +407,8 @@ const DEFAULTS = {
   teaseWaveform: '',
   waveform: PRESETS['轻叩'],
   relay: 'wss://trex.dungeon-lab.cn/v4',
+  // 调试模式：不连设备，只把要下发的指令记进调试输出
+  debugMode: false,
 };
 
 const QR_PREFIX = 'https://dungeon-lab.cn/s/?v=1&action=socket&url=';
@@ -580,6 +593,9 @@ class Dglab {
     this.message = '';
     this.pending = new Map();
     this.onchange = () => {};
+    /** 调试模式：不建立任何网络连接，只把要下发的指令记进 debugLog。 */
+    this.debugMode = false;
+    this.debugLog = [];
   }
 
   emit() { this.onchange(); }
@@ -618,9 +634,53 @@ class Dglab {
     this.intensity = [0, 0];
     this.battery = null;
     this.message = '';
+    this.debugMode = false;
+    this.debugLog = [];
     for (const p of this.pending.values()) p.cancel();
     this.pending.clear();
     this.emit();
+  }
+
+  /**
+   * 调试模式：**不建立任何网络连接**，但对外状态和正常连接完全一样
+   * （phase = paired、有一个假设备），所以判定、惩罚、开关走的是同一条代码路径，
+   * 只是 device.op 不再发出去，而是记到 debugLog。
+   */
+  connectDebug() {
+    this.disconnect();
+    this.debugMode = true;
+    this.phase = 'paired';
+    this.controllerId = 'debug-controller';
+    this.appId = 'debug-app';
+    this.devices = [{ slotId: 'debug-slot', name: '调试设备', type: 'COYOTE_030' }];
+    this.battery = 100;
+    this.appendDebug('调试模式已启用：不连接设备，只记录输出');
+    this.emit();
+  }
+
+  appendDebug(text) {
+    const d = new Date();
+    const stamp = [d.getHours(), d.getMinutes(), d.getSeconds()]
+      .map((n) => String(n).padStart(2, '0')).join(':') +
+      '.' + String(d.getMilliseconds()).padStart(3, '0');
+    this.debugLog.push({ time: stamp, text });
+    if (this.debugLog.length > 120) this.debugLog.splice(0, this.debugLog.length - 120);
+  }
+
+  /** 把一条 device.op / 清队列指令翻译成人话，调试面板直接显示。 */
+  describe(data) {
+    const channel = data.c === 0 ? 'A' : 'B';
+    if (data.t === 0) {
+      const frames = Array.isArray(data.v) ? data.v : [];
+      const first = frames[0] || '-';
+      return `波形 ${channel} · ${data.d}ms · ${frames.length} 帧 · 首帧 ${first}`;
+    }
+    if (data.t === 3) {
+      const delta = data.v;
+      return `强度 ${channel} ${delta >= 0 ? '+' + delta : delta} → ${this.intensity[data.c]}`;
+    }
+    if (data.t === 7) return `归零 ${channel}`;
+    return `op t=${data.t}`;
   }
 
   handle(text) {
@@ -719,6 +779,10 @@ class Dglab {
 
   rpc(method, params = null, timeout = 5000) {
     return new Promise((resolve) => {
+      if (this.debugMode) {
+        this.appendDebug(`RPC ${method}`);
+        return resolve({ result: {} });
+      }
       if (!this.appId) return resolve(null);
       const reqId = (crypto.randomUUID && crypto.randomUUID()) || String(Math.random()).slice(2);
       const timer = setTimeout(() => { this.pending.delete(reqId); resolve(null); }, timeout);
@@ -737,6 +801,14 @@ class Dglab {
   }
 
   request(method, data) {
+    if (this.debugMode) {
+      // 调试模式：只记录，绝不发出去
+      this.appendDebug(method === 'device.op.clear'
+        ? `清空 ${data && data.c === 1 ? 'B' : 'A'} 通道波形`
+        : this.describe(data));
+      this.emit();
+      return;
+    }
     if (!this.appId) return;
     this.post({
       t: 'req',
@@ -758,8 +830,9 @@ class Dglab {
     if (!slot) return;
     const delta = target - this.intensity[channel];
     if (!delta) return;
-    this.op({ s: slot, t: 3, c: channel, p: 1, v: delta });
+    // 先更新本地强度再下发，调试日志里显示的才是「下发后的强度」
     this.intensity[channel] = target;
+    this.op({ s: slot, t: 3, c: channel, p: 1, v: delta });
     this.emit();
   }
 
@@ -1394,6 +1467,28 @@ setInterval(() => {
 
 // ============================================================ 顶部状态
 
+/** 「连接」按当前意图走：调试模式开就连假的，否则连中继。 */
+function connectNow() {
+  if (S.debugMode) dg.connectDebug();
+  else dg.connect(S.relay);
+}
+
+function renderDebugLog() {
+  const box = $('debugLog');
+  if (!box) return;
+  const rows = dg.debugLog.slice(-12);
+  box.innerHTML = rows.length
+    ? rows.map((e) => `<div>${e.time}  ${escapeHtml(e.text)}</div>`).join('')
+    : '<div class="empty">还没有输出，点「连接」后跑一次就有了</div>';
+  box.scrollTop = box.scrollHeight;
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
 function renderStatus() {
   const el = $('status');
   const btn = $('btnConn');
@@ -1403,9 +1498,9 @@ function renderStatus() {
   if (isLive() && dg.phase !== 'paired') endSession('disconnected');
 
   if (dg.phase === 'idle') {
-    el.textContent = '未连接';
+    el.textContent = S.debugMode ? '未连接 · 调试模式' : '未连接';
     btn.textContent = '连接';
-    btn.onclick = () => dg.connect(S.relay);
+    btn.onclick = connectNow;
   } else if (dg.phase === 'connecting') {
     el.textContent = '正在连接中继…';
     btn.textContent = '连接中…';
@@ -1420,16 +1515,19 @@ function renderStatus() {
     if (dev) bits.push(dev.name || dev.type || '郊狼');
     bits.push(`A ${dg.intensity[0]} / B ${dg.intensity[1]}`);
     if (dg.battery !== null) bits.push(`${dg.battery}%`);
-    el.textContent = '已连接 · ' + bits.join(' · ');
+    el.textContent = (dg.debugMode ? '调试中（不连接设备） · ' : '已连接 · ') + bits.join(' · ');
     btn.textContent = '断开';
     btn.onclick = () => dg.disconnect();
   } else {
     el.textContent = '连接异常' + (dg.message ? ' · ' + dg.message : '');
     btn.textContent = '重连';
-    btn.onclick = () => dg.connect(S.relay);
+    btn.onclick = connectNow;
   }
 
   $('btnRun').disabled = !(dg.phase === 'paired' || isLive());
+  $('rowDebug').classList.toggle('hidden', !S.debugMode);
+  $('cDebug').checked = S.debugMode;
+  if (S.debugMode) renderDebugLog();
 }
 
 dg.onchange = renderStatus;
@@ -1684,6 +1782,17 @@ function initSettingsUI() {
   const relay = $('txtRelay');
   relay.value = S.relay;
   relay.addEventListener('input', () => { S.relay = relay.value.trim(); saveSettings(); });
+
+  const dbg = $('cDebug');
+  dbg.checked = S.debugMode;
+  dbg.addEventListener('change', () => {
+    S.debugMode = dbg.checked;
+    saveSettings();
+    // 切换调试模式时把已有连接（真实的或调试的）断掉，避免状态串味；
+    // 断开后由「连接」按钮按新意图重新连（调试模式连的是假设备）
+    dg.disconnect();
+    renderStatus();
+  });
 }
 
 $('btnSet').onclick = () => { if (!$('dlgSet').open) $('dlgSet').showModal(); };
